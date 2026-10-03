@@ -1,0 +1,21 @@
+# Changelog
+
+## [Unreleased]
+
+### Breaking Changes
+
+- Raised the documented minimum Neovim version to 0.11.7 to match Telescope's requirements
+
+### Added
+
+- Added `:ArkEdit` (`<leader>ai` in visual mode), which sends the selected lines, their file and diagnostics, and an instruction to the project's agent pane, starting it if needed while focus stays in Neovim
+- Added `:ArkChat` (`<leader>ao`), which opens and focuses the project's agent pane
+- Added `:ArkHarness` (`<leader>ah`), a single Telescope picker for the harness, model and effort level, with model catalogs fetched from each CLI in the background
+- Added harness adapters for Claude Code, Codex, Antigravity (`agy`) and Pi
+- Added one agent pane per working directory, tracked by the tmux pane option `@ark_root`
+- Added automatic reloading of buffers the agent changes on disk
+
+### Fixed
+
+- Fixed the installation example to include Telescope's Plenary dependency
+- Fixed Pi model selection to skip the effort picker for models without reasoning support
