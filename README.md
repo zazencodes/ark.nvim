@@ -1,4 +1,4 @@
-# ark.nvim Agent Harness Bridge
+# `ark.nvim` Agent Harness Bridge
 
 <p align="center">
   <a href="https://github.com/zazencodes/ark.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/zazencodes/ark.nvim" alt="Latest release"></a>
@@ -18,7 +18,7 @@
 
 Select code in Neovim, say what you want, and a coding agent in the tmux pane next to you edits the file.
 
-ark.nvim connects Neovim to your agent CLI. The agent runs in its own tmux pane with its normal interface, so you keep its full chat, tool calls and history, and talk to it from your editor.
+Ark connects Neovim to your agent CLI. The agent runs in its own tmux pane with its normal interface, so you keep its full chat, tool calls and history, and talk to it from your editor.
 
 ```text
 ┌──────────────────────────────┬──────────────────────┐
@@ -45,15 +45,15 @@ ark.nvim connects Neovim to your agent CLI. The agent runs in its own tmux pane 
 
 ## Platform support
 
-ark targets Linux and macOS. GitHub Actions runs the test suite on Ubuntu 24.04 and macOS 15 with Neovim 0.11.7 and the latest stable version. Other OS versions and Linux distributions are not covered by that matrix.
+`ark.nvim` targets Linux and macOS. GitHub Actions runs the test suite on Ubuntu 24.04 and macOS 15 with Neovim 0.11.7 and the latest stable version. Other OS versions and Linux distributions are not covered by that matrix.
 
-Native Windows is unsupported: ark requires tmux and a POSIX shell. WSL is untested; run Neovim, tmux and the agent CLI inside the same Linux environment if you try it. Each agent CLI has its own platform requirements.
+Native Windows is unsupported: Ark requires tmux and a POSIX shell. WSL is untested; run Neovim, tmux and the agent CLI inside the same Linux environment if you try it. Each agent CLI has its own platform requirements.
 
 ## Testing
 
 Run `python3 tests/run.py` with Neovim, tmux, Python 3 and Git installed. The runner downloads Telescope and Plenary into a temporary directory, so it needs network access. It uses an isolated tmux server and Neovim directories, leaving your sessions and saved harness selection alone.
 
-The suite exercises all four adapters with a fake agent, initial and follow-up prompts, selected diagnostics, save-before-send, pane reuse and focus, the real Telescope picker, Pi effort selection, buffer reloads and state persistence. It requires no agent installations, credentials or paid API calls. These checks verify ark's integration behavior; they do not verify live agents or detect changes to their CLI flags and catalog formats.
+The suite exercises all four adapters with a fake agent, initial and follow-up prompts, selected diagnostics, save-before-send, pane reuse and focus, the real Telescope picker, Pi effort selection, buffer reloads and state persistence. It requires no agent installations, credentials or paid API calls. These checks verify Ark's integration behavior; they do not verify live agents or detect changes to their CLI flags and catalog formats.
 
 CI runs on pushes and pull requests, including version-tag pushes, and can also be started manually. It does not publish releases. Check that the matrix passes before publishing a release.
 
@@ -73,7 +73,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-`setup()` (called by `opts`) creates the default keymaps. Until you pick something, ark starts Claude Code with its own default model and effort.
+`setup()` (called by `opts`) creates the default keymaps. Until you pick something, Ark starts Claude Code with its own default model and effort.
 
 ## Usage
 
@@ -122,7 +122,7 @@ To add a harness, write an adapter with the fields documented at the top of [`lu
 
 ## How it works
 
-- **Panes.** ark splits a pane beside Neovim with `tmux split-window` and tags it with the pane option `@ark_root`. tmux is the only record of which pane belongs to which project, so the link survives a Neovim restart.
+- **Panes.** Ark splits a pane beside Neovim with `tmux split-window` and tags it with the pane option `@ark_root`. tmux is the only record of which pane belongs to which project, so the link survives a Neovim restart.
 - **Instructions.** [`instructions.md`](instructions.md) tells the agent it is driven from Neovim and should edit files on disk. It is passed at launch as a system prompt (`--append-system-prompt-file` for Claude, `developer_instructions` for Codex, `--append-system-prompt` for Pi). agy has no such flag, so it receives the instructions as its first message.
 - **Requests.** Each edit sends an `<editor_context>` block (workspace, file, numbered selected lines, diagnostics) and a `<request>` block. The first one is the agent's startup prompt; later ones are pasted into the pane as one bracketed paste.
 - **Reloads.** A timer runs `:checktime` every second once an agent is in use.
@@ -139,8 +139,6 @@ See [CHANGELOG.md](CHANGELOG.md). Releases are tagged `vX.Y.Z`. A patch release 
 ## License
 
 [GPLv3](LICENSE). You can use, modify and share this code, and any version you distribute must also be released under GPLv3.
-
-For a commercial license that allows closed-source use, contact [ZazenCodes](https://zazencodes.com/).
 
 <p align="center">
   <a href="https://zazencodes.com/?utm_source=github&utm_medium=referral&utm_campaign=ark-nvim">

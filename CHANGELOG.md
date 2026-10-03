@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated README name formatting and capitalization, and removed the commercial-license contact text
+
 ## [0.1.0] - 2026-10-03
 
 ### Breaking Changes
