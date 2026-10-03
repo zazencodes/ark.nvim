@@ -43,6 +43,20 @@ ark.nvim connects Neovim to your agent CLI. The agent runs in its own tmux pane 
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) and [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - At least one agent CLI on your `PATH`
 
+## Platform support
+
+ark targets Linux and macOS. GitHub Actions runs the test suite on Ubuntu 24.04 and macOS 15 with Neovim 0.11.7 and the latest stable version. Other OS versions and Linux distributions are not covered by that matrix.
+
+Native Windows is unsupported: ark requires tmux and a POSIX shell. WSL is untested; run Neovim, tmux and the agent CLI inside the same Linux environment if you try it. Each agent CLI has its own platform requirements.
+
+## Testing
+
+Run `python3 tests/run.py` with Neovim, tmux, Python 3 and Git installed. The runner downloads Telescope and Plenary into a temporary directory, so it needs network access. It uses an isolated tmux server and Neovim directories, leaving your sessions and saved harness selection alone.
+
+The suite exercises all four adapters with a fake agent, initial and follow-up prompts, selected diagnostics, save-before-send, pane reuse and focus, the real Telescope picker, Pi effort selection, buffer reloads and state persistence. It requires no agent installations, credentials or paid API calls. These checks verify ark's integration behavior; they do not verify live agents or detect changes to their CLI flags and catalog formats.
+
+CI runs on pushes and pull requests, including version-tag pushes, and can also be started manually. It does not publish releases. Check that the matrix passes before publishing a release.
+
 ## Install
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):

@@ -14,6 +14,8 @@
 - Added harness adapters for Claude Code, Codex, Antigravity (`agy`) and Pi
 - Added one agent pane per working directory, tracked by the tmux pane option `@ark_root`
 - Added automatic reloading of buffers the agent changes on disk
+- Added credential-free integration tests and GitHub Actions CI for Linux and macOS on Neovim 0.11.7 and stable
+- Documented Linux and macOS as target platforms, native Windows as unsupported, and WSL as untested
 
 ### Fixed
 

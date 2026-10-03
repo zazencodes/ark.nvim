@@ -24,7 +24,7 @@ ark.nvim: Neovim plugin (Lua, Neovim ≥ 0.11.7) that sends editor context to a 
 
 ## Testing
 
-Test end to end on an isolated tmux server with a fake agent that records argv and stdin. Drive Neovim with `send-keys` and inspect it with `capture-pane`.
+Run `python3 tests/run.py` (requires Neovim, tmux, Python 3, Git and network access). It downloads Telescope and Plenary into a temporary directory and exercises the plugin with a fake agent on an isolated tmux server. `.github/workflows/ci.yml` runs the suite on Linux and macOS with Neovim 0.11.7 and stable. Keep checks credential-free; real-agent runs are manual.
 
 ## Changelog
 
