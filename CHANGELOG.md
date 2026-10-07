@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Custom harnesses must now be listed in `harness_order`
-- Ark now requires tmux 3.7 or later and errors on older versions
+- Raised the minimum tmux version to 3.7; Ark errors on older versions, so upgrade tmux (for example with Homebrew) before updating
 
 ### Added
 
