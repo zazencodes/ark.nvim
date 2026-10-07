@@ -1,8 +1,10 @@
 -- A multi-step Telescope picker. Each step replaces the list in the same
 -- window, so the user never leaves the picker between steps.
 --
--- step = { title, items = { { label, value }, ... }, select = function(value) }
--- where select returns the next step, or nil after the final choice.
+-- step = { title, items = { { label, value }, ... }, selected?, select = function(value) }
+-- where selected is the index of the item under the cursor when the step opens
+-- (default: the first), and select returns the next step, or nil after the
+-- final choice.
 local M = {}
 
 function M.run(step)
@@ -27,6 +29,10 @@ function M.run(step)
       prompt_title = step.title,
       finder = finder(step.items),
       sorter = conf.generic_sorter({}),
+      -- Start on `selected` while the prompt is empty, and on the best match
+      -- once the user types.
+      selection_strategy = "closest",
+      default_selection_index = step.selected,
       attach_mappings = function(prompt_bufnr)
         actions.select_default:replace(function()
           local entry = action_state.get_selected_entry()
@@ -39,6 +45,7 @@ function M.run(step)
           end
           step = next_step
           local picker = action_state.get_current_picker(prompt_bufnr)
+          picker.default_selection_index = step.selected
           picker.layout.prompt.border:change_title(step.title)
           picker:refresh(finder(step.items), { reset_prompt = true })
         end)

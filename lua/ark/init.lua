@@ -146,15 +146,22 @@ local function fetch_catalogs()
 end
 
 -- Items for `values` with a leading "default" entry (nil = the CLI's own
--- default), marking `current`.
-local function with_default(values, current)
-  local items = {}
+-- default), marking `current`. Also returns the index of the current item, or
+-- of `preferred` when nothing is current.
+local function with_default(values, current, preferred)
+  local items, selected = {}, nil
   for _, value in ipairs(vim.list_extend({ vim.NIL }, values)) do
     value = value ~= vim.NIL and value or nil
     local label = value or "default"
-    table.insert(items, { value = value, label = value == current and label .. " (current)" or label })
+    if value == current then
+      label = label .. " (current)"
+      selected = #items + 1
+    elseif value == preferred and not selected then
+      selected = #items + 1
+    end
+    table.insert(items, { value = value, label = label })
   end
-  return items
+  return items, selected
 end
 
 -- Picks harness, model, and effort in one picker, saves the selection, and
@@ -175,11 +182,13 @@ function M.pick_harness()
     vim.notify("ark: " .. state.describe(selection) .. (pane and " (agent pane restarted)" or ""))
   end
 
-  local names = vim.tbl_keys(config.options.harnesses)
-  table.sort(names)
-  local harness_items = vim.tbl_map(function(name)
-    return { value = name, label = name == current.harness and name .. " (current)" or name }
-  end, names)
+  -- The current harness first, then the rest in configured order.
+  local harness_items = { { value = current.harness, label = current.harness .. " (current)" } }
+  for _, name in ipairs(config.harness_order()) do
+    if name ~= current.harness then
+      table.insert(harness_items, { value = name, label = name })
+    end
+  end
 
   picker.run({
     title = "Ark harness",
@@ -191,11 +200,16 @@ function M.pick_harness()
       for _, model in ipairs(models.models) do
         efforts_for[model.id] = model.efforts
       end
+      local model_items, model_selected = with_default(
+        vim.tbl_map(function(m)
+          return m.id
+        end, models.models),
+        same and current.model
+      )
       return {
         title = name .. " model",
-        items = with_default(vim.tbl_map(function(m)
-          return m.id
-        end, models.models), same and current.model),
+        items = model_items,
+        selected = model_selected,
         select = function(model)
           local efforts
           if model then
@@ -206,9 +220,11 @@ function M.pick_harness()
           if not efforts then
             return finish({ harness = name, model = model })
           end
+          local effort_items, effort_selected = with_default(efforts, same and current.effort, "medium")
           return {
             title = name .. " effort",
-            items = with_default(efforts, same and current.effort),
+            items = effort_items,
+            selected = effort_selected,
             select = function(effort)
               finish({ harness = name, model = model, effort = effort })
             end,

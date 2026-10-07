@@ -8,6 +8,9 @@ M.instructions_path = plugin_root .. "/instructions.md"
 M.defaults = {
   -- Adapters for the harnesses offered by :ArkHarness. See ark/harnesses.lua.
   harnesses = require("ark.harnesses"),
+  -- Order of the harnesses in :ArkHarness, below the current one. Must list
+  -- every configured harness.
+  harness_order = { "claude", "codex", "pi", "agy" },
   -- Set by setup(). Set a key to false to leave it unmapped.
   keymaps = {
     edit = "<leader>ai",
@@ -26,6 +29,19 @@ M.options = vim.deepcopy(M.defaults)
 
 function M.setup(opts)
   M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+end
+
+function M.harness_order()
+  local order = M.options.harness_order
+  for name in pairs(M.options.harnesses) do
+    if not vim.list_contains(order, name) then
+      error(("ark: harness %q is missing from harness_order"):format(name))
+    end
+  end
+  for _, name in ipairs(order) do
+    M.harness(name)
+  end
+  return order
 end
 
 function M.harness(name)

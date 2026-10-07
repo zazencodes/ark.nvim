@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Custom harnesses must now be listed in `harness_order`
+
 ### Added
 
 - Added the current file path to `:ArkChat` (`<leader>ao`), pasted into the agent's input without submitting it, including for a newly started agent
+- Added the `harness_order` option, which orders the `:ArkHarness` harness list below the current harness (default: claude, codex, pi, agy)
+
+### Changed
+
+- Changed `:ArkHarness` to list the current harness first, and to open the model and effort steps with the cursor on the current value, or on `medium` for an effort list with no current entry
 
 ## [0.1.1] - 2026-10-03
 

@@ -94,7 +94,7 @@ To start a new conversation, use the agent's own `/clear`. To end it, exit the a
 | `agy` | `agy models` | Part of the model id, e.g. `gemini-3.1-pro-high` |
 | `pi` | `pi --list-models` | `--thinking`, off to max, for models that support it |
 
-Every model and effort list starts with `default`, which passes no flag, so the CLI uses its own configured default. The selection is saved in `stdpath("state")/ark.json` and applies to every project.
+The picker lists the current harness first, then the others in `harness_order`. Every model and effort list starts with `default`, which passes no flag, so the CLI uses its own configured default. The cursor starts on the current model and effort, or on `medium` when the effort list has no current entry. The selection is saved in `stdpath("state")/ark.json` and applies to every project.
 
 ## Configuration
 
@@ -106,6 +106,7 @@ require("ark").setup({
     -- Override any field of a built-in adapter, typically `cmd`:
     -- claude = { cmd = { "claude", "--dangerously-skip-permissions" } },
   },
+  harness_order = { "claude", "codex", "pi", "agy" }, -- order in :ArkHarness; must list every harness
   keymaps = { edit = "<leader>ai", chat = "<leader>ao", harness = "<leader>ah" }, -- false disables one
   pane = { size = "40%" },   -- width of the agent pane
   checktime_interval = 1000, -- ms between checks for files changed on disk
@@ -118,7 +119,7 @@ A harness `cmd` can be a wrapper. This one loads an API key from a file before s
 pi = { cmd = { "sh", "-c", 'OPENCODE_API_KEY=$(cat ~/.secrets/opencode) exec pi "$@"', "pi" } },
 ```
 
-To add a harness, write an adapter with the fields documented at the top of [`lua/ark/harnesses.lua`](lua/ark/harnesses.lua) and add it under `harnesses`.
+To add a harness, write an adapter with the fields documented at the top of [`lua/ark/harnesses.lua`](lua/ark/harnesses.lua) and add it under `harnesses` and to `harness_order`.
 
 ## How it works
 

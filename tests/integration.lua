@@ -133,6 +133,45 @@ local function test()
   assert(vim.fs.basename(vim.api.nvim_buf_get_name(0)) == "sample.txt", "picker must restore the file buffer")
   assert(not vim.bo.modified, "picker must leave the file buffer unmodified")
 
+  -- The current harness leads, and each step opens on the current value, or
+  -- on medium for an effort with no current value.
+  -- Waits until the picker shows `values` in order with the cursor on `selected`.
+  local function expect(values, selected)
+    wait_for(function() return vim.bo.filetype == "TelescopePrompt" end, "picker did not open")
+    local picker = action_state.get_current_picker(vim.api.nvim_get_current_buf())
+    local shown
+    wait_for(function()
+      if not picker.manager or not picker:get_selection() then return false end
+      shown = {}
+      for i = 1, picker.manager:num_results() do
+        table.insert(shown, picker.manager:get_entry(i).value or "default")
+      end
+      return table.concat(shown, ",") == table.concat(values, ",")
+        and (picker:get_selection().value or "default") == selected
+    end, "picker shows " .. table.concat(shown or {}, ",") .. ", want " .. table.concat(values, ",") .. " at " .. selected)
+  end
+  state.save({ harness = "pi", model = "example/reasoning", effort = "high" })
+  local pi_efforts = { "default", "off", "minimal", "low", "medium", "high", "xhigh", "max" }
+  vim.cmd("ArkHarness")
+  expect({ "pi", "claude", "codex", "agy" }, "pi")
+  choose("pi")
+  expect({ "default", "example/plain", "example/reasoning" }, "example/reasoning")
+  choose("example/reasoning")
+  expect(pi_efforts, "high")
+  choose("high")
+  wait_for(function() return vim.bo.filetype ~= "TelescopePrompt" end, "picker did not close")
+  vim.cmd("ArkHarness")
+  choose("claude")
+  expect({ "default", "fable", "opus", "sonnet", "haiku" }, "default")
+  choose("opus")
+  expect({ "default", "low", "medium", "high", "xhigh", "max" }, "medium")
+  choose("medium")
+  wait_for(function() return vim.bo.filetype ~= "TelescopePrompt" end, "picker did not close")
+  vim.cmd("ArkHarness")
+  expect({ "claude", "codex", "pi", "agy" }, "claude")
+  actions.close(vim.api.nvim_get_current_buf())
+  wait_for(function() return vim.bo.filetype ~= "TelescopePrompt" end, "picker did not close")
+
   state.save({ harness = "pi", model = "example/reasoning", effort = "high" })
 end
 
