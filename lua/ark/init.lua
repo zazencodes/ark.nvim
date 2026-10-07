@@ -97,7 +97,7 @@ function M.chat()
   local root = project_root()
   local ctx
   if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
-    ctx = context.file(buf, root, vim.api.nvim_win_get_cursor(0)[1])
+    ctx = context.file(buf, root)
   end
   local pane = tmux.find_pane(root)
   local started = not pane

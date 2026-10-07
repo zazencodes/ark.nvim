@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the current file and cursor line to `:ArkChat` (`<leader>ao`), pasted into the agent's input without submitting it, including for a newly started agent
+- Added the current file path to `:ArkChat` (`<leader>ao`), pasted into the agent's input without submitting it, including for a newly started agent
 
 ## [0.1.1] - 2026-10-03
 

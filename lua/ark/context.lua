@@ -3,25 +3,27 @@ local M = {}
 
 local severity_names = { "ERROR", "WARN", "INFO", "HINT" }
 
-local function header(buf, root)
+-- The path of the file open in `buf`, relative to `root` when inside it.
+local function file_path(buf, root)
   local path = vim.api.nvim_buf_get_name(buf)
   if path == "" then
     error("ark: buffer has no file on disk")
   end
+  return vim.fs.relpath(root, path) or path
+end
+
+local function header(buf, root)
   return {
     "<editor_context>",
     "workspace: " .. root,
-    "file: " .. (vim.fs.relpath(root, path) or path),
+    "file: " .. file_path(buf, root),
     "filetype: " .. vim.bo[buf].filetype,
   }
 end
 
--- The file open in `buf` and the cursor line, without any file contents.
-function M.file(buf, root, cursor_line)
-  local lines = header(buf, root)
-  table.insert(lines, "cursor: line " .. cursor_line)
-  table.insert(lines, "</editor_context>")
-  return table.concat(lines, "\n")
+-- Only the file open in `buf`.
+function M.file(buf, root)
+  return table.concat({ "<editor_context>", "file: " .. file_path(buf, root), "</editor_context>" }, "\n")
 end
 
 -- range: { start_line, end_line }, 1-based and inclusive.
