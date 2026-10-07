@@ -34,7 +34,7 @@ Ark connects Neovim to your agent CLI. The agent runs in its own tmux pane with 
 ## Features
 
 - **Edit from a selection.** Visually select lines, press `<leader>ai`, type an instruction. The agent gets the file, the selected lines and their diagnostics, and edits the file on disk. Your cursor stays in Neovim.
-- **A real conversation beside your code.** Every edit goes into the same agent session in a side pane, so you can follow up there ("make it async", "undo that"). `<leader>ao` jumps to it.
+- **A real conversation beside your code.** Every edit goes into the same agent session in a side pane, so you can follow up there ("make it async", "undo that"). `<leader>ao` jumps to it and drops the file you're in into the agent's input, so your next message is about that file.
 - **Swap harness, model and effort.** `<leader>ah` opens one Telescope picker: harness, then model, then effort level. The model lists come from the CLIs themselves, so they stay current.
 
 ## Requirements
@@ -80,7 +80,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 | Key | Mode | Command | Action |
 | --- | --- | --- | --- |
 | `<leader>ai` | visual | `:ArkEdit` | Ask the agent to edit the selected lines. Saves the buffer first and starts the agent pane if needed. Focus stays in Neovim. |
-| `<leader>ao` | normal | `:ArkChat` | Open the agent pane and focus it, starting the agent if needed. |
+| `<leader>ao` | normal | `:ArkChat` | Open the agent pane and focus it, starting the agent if needed. If the current buffer is a file, Ark pastes which file and cursor line you are on into the agent's input, unsent, ahead of what you type. A new agent gets the paste once its interface accepts input. |
 | `<leader>ah` | normal | `:ArkHarness` | Pick the harness, model and effort. Restarts a running agent pane, which ends its conversation. |
 
 To start a new conversation, use the agent's own `/clear`. To end it, exit the agent; its pane closes.
@@ -124,12 +124,13 @@ To add a harness, write an adapter with the fields documented at the top of [`lu
 
 - **Panes.** Ark splits a pane beside Neovim with `tmux split-window` and tags it with the pane option `@ark_root`. tmux is the only record of which pane belongs to which project, so the link survives a Neovim restart.
 - **Instructions.** [`instructions.md`](instructions.md) tells the agent it is driven from Neovim and should edit files on disk. It is passed at launch as a system prompt (`--append-system-prompt-file` for Claude, `developer_instructions` for Codex, `--append-system-prompt` for Pi). agy has no such flag, so it receives the instructions as its first message.
+- **Chat context.** `:ArkChat` pastes an `<editor_context>` block with the workspace, file, filetype and cursor line, but no file contents, without submitting it. For a new agent, Ark waits up to 10 seconds for it to enable bracketed paste (tmux `#{bracket_paste_flag}`), which agent interfaces do once they read input.
 - **Requests.** Each edit sends an `<editor_context>` block (workspace, file, numbered selected lines, diagnostics) and a `<request>` block. The first one is the agent's startup prompt; later ones are pasted into the pane as one bracketed paste.
 - **Reloads.** A timer runs `:checktime` every second once an agent is in use.
 
 ## Notes
 
-- The first launch in a new folder shows the agent's own folder-trust prompt. Answer it in the pane, and the request then runs.
+- The first launch in a new folder shows the agent's own folder-trust prompt. Answer it in the pane, and the request then runs. A startup dialog like this also receives `:ArkChat`'s file context paste, which is then lost; press `<leader>ao` again after answering it.
 - Codex prints a startup warning that `-c` overrides force "embedded mode". It is harmless.
 
 ## Changelog

@@ -3,20 +3,30 @@ local M = {}
 
 local severity_names = { "ERROR", "WARN", "INFO", "HINT" }
 
--- range: { start_line, end_line }, 1-based and inclusive.
-function M.build(buf, root, range)
+local function header(buf, root)
   local path = vim.api.nvim_buf_get_name(buf)
   if path == "" then
     error("ark: buffer has no file on disk")
   end
-  local file = vim.fs.relpath(root, path) or path
-
-  local lines = {
+  return {
     "<editor_context>",
     "workspace: " .. root,
-    "file: " .. file,
+    "file: " .. (vim.fs.relpath(root, path) or path),
     "filetype: " .. vim.bo[buf].filetype,
   }
+end
+
+-- The file open in `buf` and the cursor line, without any file contents.
+function M.file(buf, root, cursor_line)
+  local lines = header(buf, root)
+  table.insert(lines, "cursor: line " .. cursor_line)
+  table.insert(lines, "</editor_context>")
+  return table.concat(lines, "\n")
+end
+
+-- range: { start_line, end_line }, 1-based and inclusive.
+function M.selection(buf, root, range)
+  local lines = header(buf, root)
 
   local first, last = range[1], range[2]
   table.insert(lines, ("selection: lines %d-%d"):format(first, last))

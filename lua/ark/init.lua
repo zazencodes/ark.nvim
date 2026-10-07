@@ -75,7 +75,7 @@ end
 function M.edit(range)
   local buf = vim.api.nvim_get_current_buf()
   local root = project_root()
-  local ctx = context.build(buf, root, range)
+  local ctx = context.selection(buf, root, range)
 
   vim.ui.input({ prompt = "Ark edit: " }, function(input)
     if not input or vim.trim(input) == "" then
@@ -90,12 +90,28 @@ function M.edit(range)
 end
 
 -- Focuses the project's agent pane, starting the selected harness if none is
--- running.
+-- running. When the current buffer is a file, its context is pasted into the
+-- agent's input, unsent, ahead of whatever the user types next.
 function M.chat()
+  local buf = vim.api.nvim_get_current_buf()
   local root = project_root()
-  local pane = tmux.find_pane(root) or launch(root)
+  local ctx
+  if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+    ctx = context.file(buf, root, vim.api.nvim_win_get_cursor(0)[1])
+  end
+  local pane = tmux.find_pane(root)
+  local started = not pane
+  if started then
+    pane = launch(root)
+  end
   sync.start(config.options.checktime_interval)
   tmux.focus(pane)
+  if ctx then
+    if started then
+      tmux.wait_for_input(pane, 10000)
+    end
+    tmux.paste(pane, ctx .. "\n\n")
+  end
 end
 
 -- Starts every harness's catalog command in the background. Returns a
