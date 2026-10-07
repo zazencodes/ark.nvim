@@ -9,7 +9,7 @@
 
 ### Added
 
-- Added the current file path to `:ArkChat` (`<leader>ao`), pasted into the agent's input without submitting it, including for a newly started agent
+- Added the current file path to `:ArkChat` (`<leader>ao`), pasted into a running agent's input without submitting it, or given to a new agent with its startup instructions
 - Added the `harness_order` option, which orders the `:ArkHarness` harness list below the current harness (default: claude, codex, pi, agy)
 
 ### Changed

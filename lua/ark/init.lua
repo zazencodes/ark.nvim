@@ -30,15 +30,24 @@ end
 -- Starts the selected harness in a new pane. `prompt` (optional) is passed as
 -- the initial prompt argument via a temp file, which avoids waiting for the
 -- harness UI to become ready and keeps large prompts out of tmux's command
--- message.
-local function launch(root, prompt)
+-- message. `ctx` (optional) is appended to the instructions, so a new agent
+-- knows the editor context without a paste racing its startup.
+local function launch(root, prompt, ctx)
   local selection = state.load()
   local harness = config.harness(selection.harness)
   local argv = vim.deepcopy(harness.cmd)
+  local instructions = table.concat(vim.fn.readfile(config.instructions_path), "\n")
+  if ctx then
+    instructions = instructions .. "\n\n" .. ctx
+  end
   if harness.instructions_args then
-    vim.list_extend(argv, harness.instructions_args(config.instructions_path))
+    local path = config.instructions_path
+    if ctx then
+      path = vim.fn.tempname()
+      assert(vim.fn.writefile(vim.split(instructions, "\n", { plain = true }), path) == 0)
+    end
+    vim.list_extend(argv, harness.instructions_args(path))
   else
-    local instructions = table.concat(vim.fn.readfile(config.instructions_path), "\n")
     prompt = prompt and (instructions .. "\n\n" .. prompt) or instructions
   end
   if selection.model then
@@ -90,8 +99,9 @@ function M.edit(range)
 end
 
 -- Focuses the project's agent pane, starting the selected harness if none is
--- running. When the current buffer is a file, its context is pasted into the
--- agent's input, unsent, ahead of whatever the user types next.
+-- running. When the current buffer is a file, a running agent gets its context
+-- pasted into its input, unsent, ahead of whatever the user types next; a new
+-- agent gets it with its instructions.
 function M.chat()
   local buf = vim.api.nvim_get_current_buf()
   local root = project_root()
@@ -100,18 +110,15 @@ function M.chat()
     ctx = context.file(buf, root)
   end
   local pane = tmux.find_pane(root)
-  local started = not pane
-  if started then
-    pane = launch(root)
+  if pane then
+    if ctx then
+      tmux.paste(pane, ctx .. "\n\n")
+    end
+  else
+    pane = launch(root, nil, ctx)
   end
   sync.start(config.options.checktime_interval)
   tmux.focus(pane)
-  if ctx then
-    if started then
-      tmux.wait_for_input(pane, 10000)
-    end
-    tmux.paste(pane, ctx .. "\n\n")
-  end
 end
 
 -- Starts every harness's catalog command in the background. Returns a

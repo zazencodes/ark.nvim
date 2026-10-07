@@ -58,17 +58,6 @@ function M.spawn(root, argv, size)
   return id
 end
 
--- Blocks until the program in the pane enables bracketed paste, which agent
--- TUIs do once they read input. Errors after `timeout` ms.
-function M.wait_for_input(pane, timeout)
-  local ready = vim.wait(timeout, function()
-    return tmux({ "display-message", "-p", "-t", pane, "#{bracket_paste_flag}" }) == "1"
-  end, 50)
-  if not ready then
-    error(("ark: agent in pane %s did not accept input within %d ms"):format(pane, timeout))
-  end
-end
-
 -- Pastes `text` into the pane's input as a single bracketed paste.
 function M.paste(pane, text)
   local buffer = "ark"
