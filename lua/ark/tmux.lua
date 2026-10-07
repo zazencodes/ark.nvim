@@ -4,7 +4,25 @@ local M = {}
 
 local ROOT_OPTION = "@ark_root"
 
+-- bracket_paste_flag, used by wait_for_input, first appeared in tmux 3.7.
+local function check_version()
+  local out = vim.system({ "tmux", "-V" }, { text = true }):wait().stdout
+  local major, minor = out:match("(%d+)%.(%d+)")
+  if not major then
+    error(("ark: could not parse tmux version from %q"):format(vim.trim(out)))
+  end
+  if tonumber(major) < 3 or (tonumber(major) == 3 and tonumber(minor) < 7) then
+    error(("ark: tmux 3.7 or later is required, found %s"):format(vim.trim(out)))
+  end
+end
+
+local version_checked = false
+
 local function tmux(args, stdin)
+  if not version_checked then
+    check_version()
+    version_checked = true
+  end
   local result = vim.system(vim.list_extend({ "tmux" }, args), { stdin = stdin, text = true }):wait()
   if result.code ~= 0 then
     error(("ark: tmux %s failed: %s"):format(args[1], vim.trim(result.stderr)))
