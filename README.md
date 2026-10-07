@@ -39,7 +39,7 @@ Ark connects Neovim to your agent CLI. The agent runs in its own tmux pane with 
 
 ## Requirements
 
-- Neovim 0.11.7 or later, running inside tmux 3.7 or later
+- Neovim 0.11.7 or later, running inside tmux
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) and [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - At least one agent CLI on your `PATH`
 
