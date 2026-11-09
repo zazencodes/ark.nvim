@@ -2,9 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `:ArkFocus` to focus or start the agent without adding file context, with an optional `keymaps.focus` mapping (disabled by default)
+- Added `:ArkStatus` for the project, live pane, running selection, saved preference and last errors, plus `:checkhealth ark` for dependency and configuration checks
+- Added `:ArkReview` with preserved editor/before and disk snapshots in read-only diff tabs, and confirmed `:ArkResolve disk|buffer` actions that reject changes made during confirmation and can recreate deleted files from the buffer
+- Added `:ArkHarness!` to refresh the selected harness's model catalog and `catalog_timeout_ms` (default 10000)
+- Added root-scoped sync lifecycle/status APIs and `ArkSyncConflict`/`ArkSyncReload` events, including previous buffer lines on reload
+- Added credential-free focused sync tests and a deterministic work regression check across 256 loaded files
+
 ### Changed
 
+- Changed model catalogs to load asynchronously only for the selected harness, cache successful results for the Neovim session, and cancel when the picker closes
+- Changed harness replacement to prepare the new launch, ask before ending a conversation, validate a candidate and save the preference before removing the existing pane, with rollback/cleanup attempts on failure; selecting the saved preference again is a no-op
+- Changed tmux operations to run asynchronously with deadlines, serialize input per pane, and use unique paste buffers with cleanup
+- Scoped file sync to loaded buffers under active project roots, coalesced pending callbacks, and stopped sync when asynchronous checks find a missing or dead agent pane
 - Changed saved preferences to use validated, atomic writes and report invalid state explicitly
+
+### Fixed
+
+- Preserved unsaved buffer edits when files change or disappear on disk, with explicit conflict status and review snapshots
+- Removed sync's global `autoread` side effect; buffer-local settings also remain unchanged
+- Avoided repeated `checktime` commands for unchanged files and removed sync timers, autocommands and queued work when the last project stops
+- Captured edit buffer/range/project before asynchronous prompts, rejected intervening buffer changes, and generated selection context after saving
 
 ## [0.2.0] - 2026-10-07
 

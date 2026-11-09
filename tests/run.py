@@ -36,8 +36,12 @@ def main():
         def tmux(*args, **kwargs):
             return run(["tmux", "-L", socket, *args], env=env, **kwargs)
 
-        run(["nvim", "--headless", "-u", "NONE", "-l", str(ROOT / "tests/state.lua")],
-            env=env, timeout=30)
+        for suite in ("state", "transport", "catalog", "workflow", "sync", "review"):
+            script = ROOT / "tests" / (suite + ".lua")
+            if not script.exists():
+                raise AssertionError("missing focused suite: " + str(script))
+            run(["nvim", "--headless", "-u", "NONE", "-l", str(script)],
+                env=env, timeout=30)
         (directory / "sample.txt").write_text("first line\nsecond line\n")
         try:
             command = shlex.join(["nvim", "-u", str(ROOT / "tests/init.lua"), "sample.txt"])
@@ -60,14 +64,17 @@ def main():
                              'local s=require("ark.state").load()\n'
                              'assert(s.harness=="pi" and s.model=="example/reasoning" and s.effort=="high")\n')
             run(["nvim", "--headless", "-u", "NONE", "-l", str(check)], env=env, timeout=10)
-            print("PASS: all adapters, transport, focus, pane reuse, Telescope, Pi efforts, reloads, persisted state")
+            print("PASS: all adapters, async transport, focus, metadata, Telescope, replacement/no-op/cancel, "
+                  "format-on-save, captured cwd, reloads, persisted state")
         except Exception:
-            tmux("capture-pane", "-p", "-t", "test:0.0")
+            subprocess.run(["tmux", "-L", socket, "capture-pane", "-p", "-t", "test:0.0"],
+                           env=env, check=False)
             if (directory / "stdin.bin").exists():
                 print("Received bytes:", repr((directory / "stdin.bin").read_bytes()))
             raise
         finally:
-            tmux("kill-server")
+            subprocess.run(["tmux", "-L", socket, "kill-server"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 if __name__ == "__main__":

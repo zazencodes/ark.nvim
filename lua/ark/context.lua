@@ -26,8 +26,20 @@ function M.file(buf, root)
   return table.concat({ "<editor_context>", "file: " .. file_path(buf, root), "</editor_context>" }, "\n")
 end
 
+function M.validate(buf, range)
+  if not vim.api.nvim_buf_is_loaded(buf) or vim.bo[buf].buftype ~= "" or vim.api.nvim_buf_get_name(buf) == "" then
+    error("ark: selection needs a loaded file buffer")
+  end
+  local first, last = range[1], range[2]
+  if type(first) ~= "number" or type(last) ~= "number" or first % 1 ~= 0 or last % 1 ~= 0
+    or first < 1 or last < first or last > vim.api.nvim_buf_line_count(buf) then
+    error("ark: selection no longer fits the saved buffer; select it again")
+  end
+end
+
 -- range: { start_line, end_line }, 1-based and inclusive.
 function M.selection(buf, root, range)
+  M.validate(buf, range)
   local lines = header(buf, root)
 
   local first, last = range[1], range[2]

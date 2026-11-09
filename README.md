@@ -36,6 +36,8 @@ Ark connects Neovim to your agent CLI. The agent runs in its own tmux pane with 
 - **Edit from a selection.** Visually select lines, press `<leader>ai`, type an instruction. The agent gets the file, the selected lines and their diagnostics, and edits the file on disk. Your cursor stays in Neovim.
 - **A real conversation beside your code.** Every edit goes into the same agent session in a side pane, so you can follow up there ("make it async", "undo that"). `<leader>ao` jumps to it and drops the file you're in into the agent's input, so your next message is about that file.
 - **Swap harness, model and effort.** `<leader>ah` opens one Telescope picker: harness, then model, then effort level. The model lists come from the CLIs themselves, so they stay current.
+- **Review disk changes.** `:ArkReview` compares preserved editor and disk versions. Conflicts keep your edits intact until you choose which version to keep.
+- **Inspect the connection.** `:ArkStatus` shows the project, agent pane, running selection, saved preference and last errors. `:checkhealth ark` checks dependencies and configuration.
 
 ## Requirements
 
@@ -54,6 +56,8 @@ Native Windows is unsupported: Ark requires tmux and a POSIX shell. WSL is untes
 Run `python3 tests/run.py` with Neovim, tmux, Python 3 and Git installed. The runner downloads Telescope and Plenary into a temporary directory, so it needs network access. It uses an isolated tmux server and Neovim directories, leaving your sessions and saved harness selection alone.
 
 The suite exercises all four adapters with a fake agent, initial and follow-up prompts, selected diagnostics, save-before-send, pane reuse and focus, the real Telescope picker, Pi effort selection, buffer reloads and state persistence. It requires no agent installations, credentials or paid API calls. These checks verify Ark's integration behavior; they do not verify live agents or detect changes to their CLI flags and catalog formats.
+
+Run `nvim --headless -u NONE -l tests/sync.lua` for focused sync checks without tmux or network access. It tests scoped reloads, conflict preservation, lifecycle cleanup, callback coalescing and a real timer. Its work regression check compares global `checktime` invocations with scoped stats and reload commands across 256 loaded files. It measures work counts, not live CPU usage.
 
 CI runs on pushes and pull requests, including version-tag pushes, and can also be started manually. It does not publish releases. Check that the matrix passes before publishing a release.
 
@@ -81,9 +85,17 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 | --- | --- | --- | --- |
 | `<leader>ai` | visual | `:ArkEdit` | Ask the agent to edit the selected lines. Saves the buffer first and starts the agent pane if needed. Focus stays in Neovim. |
 | `<leader>ao` | normal | `:ArkChat` | Open the agent pane and focus it, starting the agent if needed. If the current buffer is a file, Ark pastes which file you are in into a running agent's input, unsent, ahead of what you type. A new agent gets it with its startup instructions instead. |
-| `<leader>ah` | normal | `:ArkHarness` | Pick the harness, model and effort. Restarts a running agent pane, which ends its conversation. |
+| `<leader>ah` | normal | `:ArkHarness` | Pick the harness, model and effort. Replacing a running agent requires confirmation to end its conversation. Selecting the saved preference again does nothing. |
+| Unmapped | normal | `:ArkHarness!` | Pick a harness and refresh its model catalog for this selection. |
+| Unmapped | normal | `:ArkFocus` | Focus the agent pane, starting it if needed, without adding file context. |
+| Unmapped | normal | `:ArkStatus` | Show the project, pane, running selection, saved preference and last errors. |
+| Unmapped | normal | `:ArkReview` | Open a read-only diff tab with preserved editor/before and disk versions. |
+| Unmapped | normal | `:ArkResolve disk` | Confirm replacing the original buffer's edits with the disk version. |
+| Unmapped | normal | `:ArkResolve buffer` | Confirm writing the original buffer over the disk file, recreating a deleted file if needed. |
 
 To start a new conversation, use the agent's own `/clear`. To end it, exit the agent; its pane closes.
+
+`ArkReview` works from the original buffer or either review snapshot. It opens the latest captured change and errors when none was captured; it does not provide a complete change history. The diff leaves the original buffer untouched. `ArkResolve` asks before replacing either version and checks that neither the buffer nor disk changed during confirmation. To recover a deleted file, use `ArkResolve buffer`. Review snapshots use `ark://review/...` buffer names and remain hidden when their windows close, for the rest of the Neovim session. They are session memory, so save any versions you need before exiting Neovim.
 
 ## Harnesses
 
@@ -96,7 +108,9 @@ To start a new conversation, use the agent's own `/clear`. To end it, exit the a
 
 The picker lists the current harness first, then the others in `harness_order`. Every model and effort list starts with `default`, which passes no flag, so the CLI uses its own configured default. The cursor starts on the current model and effort, or on `medium` when the effort list has no current entry. The selection is saved in `stdpath("state")/ark.json` and applies to every project.
 
-Saved preferences are validated and replaced atomically; an invalid `ark.json` must be repaired or removed before retrying.
+Only the selected harness's catalog runs, asynchronously. The picker stays responsive while it loads; closing it cancels the request. Successful catalogs are cached for the Neovim session. Use `:ArkHarness!` to refresh the harness you select. Catalog requests time out after `catalog_timeout_ms`.
+
+For a running pane, Ark prepares the new launch before asking to end the conversation, starts and validates a candidate pane, saves the preference, then removes the old pane. Cancellation or candidate/preference-save failure keeps the existing conversation; a failed preference save triggers candidate cleanup. If removing the old pane fails, Ark attempts to restore the preference and remove the candidate. Rollback or cleanup failures are reported explicitly; inspect `:ArkStatus` and the panes before retrying. `:ArkStatus` distinguishes the pane's running selection from the global preference; existing panes in other projects keep their running selection.
 
 ## Configuration
 
@@ -109,9 +123,13 @@ require("ark").setup({
     -- claude = { cmd = { "claude", "--dangerously-skip-permissions" } },
   },
   harness_order = { "claude", "codex", "pi", "agy" }, -- order in :ArkHarness; must list every harness
-  keymaps = { edit = "<leader>ai", chat = "<leader>ao", harness = "<leader>ah" }, -- false disables one
+  keymaps = {
+    edit = "<leader>ai", chat = "<leader>ao", harness = "<leader>ah",
+    focus = false, -- optionally map :ArkFocus, e.g. "<leader>af"
+  }, -- false disables a default mapping
   pane = { size = "40%" },   -- width of the agent pane
-  checktime_interval = 1000, -- ms between checks for files changed on disk
+  checktime_interval = 1000, -- ms between scoped checks for files changed on disk
+  catalog_timeout_ms = 10000, -- deadline for a selected harness's model catalog
 })
 ```
 
@@ -123,13 +141,24 @@ pi = { cmd = { "sh", "-c", 'OPENCODE_API_KEY=$(cat ~/.secrets/opencode) exec pi 
 
 To add a harness, write an adapter with the fields documented at the top of [`lua/ark/harnesses.lua`](lua/ark/harnesses.lua) and add it under `harnesses` and to `harness_order`.
 
+Intervals must be positive integers. Harness commands must be nonempty argv lists, and every adapter needs a `catalog()` function. Invalid configuration or saved state raises an error. Saved preferences are validated and replaced atomically; an invalid `ark.json` must be repaired or removed before retrying.
+
 ## How it works
 
 - **Panes.** Ark splits a pane beside Neovim with `tmux split-window` and tags it with the pane option `@ark_root`. tmux is the only record of which pane belongs to which project, so the link survives a Neovim restart.
 - **Instructions.** [`instructions.md`](instructions.md) tells the agent it is driven from Neovim and should edit files on disk. It is passed at launch as a system prompt (`--append-system-prompt-file` for Claude, `developer_instructions` for Codex, `--append-system-prompt` for Pi). agy has no such flag, so it receives the instructions as its first message.
 - **Chat context.** `:ArkChat` pastes an `<editor_context>` block with only the file path, without submitting it. A new agent starts with that block appended to its instructions (for Antigravity, its first prompt), so nothing depends on how fast the agent starts.
 - **Requests.** Each edit sends an `<editor_context>` block (workspace, file, numbered selected lines, diagnostics) and a `<request>` block. The first one is the agent's startup prompt; later ones are pasted into the pane as one bracketed paste.
-- **Reloads.** A timer runs `:checktime` every second once an agent is in use.
+- **Transport.** tmux operations run asynchronously with deadlines and actionable errors. Input to each pane is serialized and uses a unique named paste buffer, which Ark removes after use. Edit requests capture the file, range and project before prompting, reject changes made during the prompt, then build context after saving.
+- **Reloads.** Each active project checks only its loaded file buffers, including hidden buffers. An initial scoped `checktime` catches earlier changes; subsequent ticks stat those files and run buffer-specific `checktime` only when their disk signature changes. Callbacks coalesce while one is pending. Ark leaves global and buffer-local `autoread` settings unchanged.
+- **Conflicts.** Reloads initiated by Ark preserve a before/disk snapshot. Modified buffers and deleted files detected by Ark produce a conflict, preserve the buffer, and expose both versions through `:ArkReview`. Conflicts are reported once per observed disk version and clear after an explicit read or write. Neovim's own `autoread` checks or another plugin can reload a file first; those reloads bypass Ark's before snapshot.
+- **Lifecycle.** An asynchronous pane check runs once a second for used projects. A missing or dead pane stops that project's sync. Stopping the last project or exiting Neovim closes sync timers, removes its autocommands and cancels queued sync work.
+
+### Sync integration
+
+`require("ark.sync").start(root, interval_ms)` registers an absolute project root; calling it again updates the interval. `stop(root)` removes one root and `stop()` removes all roots. Overlapping roots use the most specific root for each buffer. `status()` returns a detached table with `running`, `pending`, `roots` (path to interval), and `buffers`, `conflicts`, `reloads` (buffer number to record).
+
+`User` events `ArkSyncConflict` and `ArkSyncReload` carry `ev.data = { buf, path, root, reason }`; `reason` is `changed` or `deleted`. Reload events and status records also include `previous_lines`, captured before reloading. Register listeners before starting sync. Pane liveness belongs to the caller; sync itself starts no subprocesses.
 
 ## Notes
 

@@ -4,242 +4,306 @@ local picker = require("ark.picker")
 local state = require("ark.state")
 local sync = require("ark.sync")
 local tmux = require("ark.tmux")
-
+local status = require("ark.status")
+local review = require("ark.review")
 local M = {}
+local busy, watching, probes = {}, {}, {}
+local monitor
 
-function M.setup(opts)
-  config.setup(opts)
-  local keymaps = config.options.keymaps
-  if keymaps.edit then
-    vim.keymap.set("x", keymaps.edit, ":ArkEdit<CR>", { silent = true, desc = "ark: edit selection" })
-  end
-  if keymaps.chat then
-    vim.keymap.set("n", keymaps.chat, "<cmd>ArkChat<CR>", { desc = "ark: open agent pane" })
-  end
-  if keymaps.harness then
-    vim.keymap.set("n", keymaps.harness, "<cmd>ArkHarness<CR>", { desc = "ark: pick harness, model, effort" })
-  end
-end
-
--- Sessions are keyed by Neovim's working directory, so each project or
--- worktree gets its own agent pane and conversation.
-local function project_root()
+local function root_directory()
   return vim.fn.getcwd()
 end
 
--- Starts the selected harness in a new pane. `prompt` (optional) is passed as
--- the initial prompt argument via a temp file, which avoids waiting for the
--- harness UI to become ready and keeps large prompts out of tmux's command
--- message. `ctx` (optional) is appended to the instructions, so a new agent
--- knows the editor context without a paste racing its startup.
-local function launch(root, prompt, ctx)
-  local selection = state.load()
-  local harness = config.harness(selection.harness)
-  local argv = vim.deepcopy(harness.cmd)
-  local instructions = table.concat(vim.fn.readfile(config.instructions_path), "\n")
-  if ctx then
-    instructions = instructions .. "\n\n" .. ctx
+-- Every project has one in-flight workflow, including input/confirmation.
+-- This also prevents pane discovery while a replacement has two tagged panes.
+local function operation(root, run)
+  if busy[root] then error("ark: another operation is pending for " .. root) end
+  busy[root] = true
+  local finished = false
+  local function finish(err)
+    if finished then return end
+    finished = true
+    busy[root] = nil
+    if err then status.record(root, err); error(err) end
   end
-  if harness.instructions_args then
-    local path = config.instructions_path
-    if ctx then
-      path = vim.fn.tempname()
-      assert(vim.fn.writefile(vim.split(instructions, "\n", { plain = true }), path) == 0)
+  local function guarded(fn)
+    return function(...)
+      if finished then return end
+      local ok, err = pcall(fn, ...)
+      if not ok then
+        if finished then error(err) else finish(err) end
+      end
     end
-    vim.list_extend(argv, harness.instructions_args(path))
-  else
-    prompt = prompt and (instructions .. "\n\n" .. prompt) or instructions
   end
-  if selection.model then
-    vim.list_extend(argv, harness.model_args(selection.model))
-  end
-  if selection.effort then
-    vim.list_extend(argv, harness.effort_args(selection.effort))
-  end
-  if prompt then
-    if harness.prompt_flag then
-      table.insert(argv, harness.prompt_flag)
+  guarded(run)(finish, guarded)
+end
+
+local function watch(root)
+  review.setup()
+  sync.start(root, config.options.checktime_interval)
+  watching[root] = true
+  if monitor then return end
+  monitor = assert(vim.uv.new_timer())
+  monitor:start(1000, 1000, vim.schedule_wrap(function()
+    for project in pairs(watching) do
+      if not busy[project] and not probes[project] then
+        probes[project] = true
+        tmux.find_pane(project, function(err, pane)
+          probes[project] = nil
+          if busy[project] then return end
+          if err or not pane then
+            watching[project] = nil
+            sync.stop(project)
+            if err then status.record(project, err) end
+          end
+        end)
+      end
     end
+    if not next(watching) and monitor then monitor:stop(); monitor:close(); monitor = nil end
+  end))
+end
+
+function M.setup(opts)
+  config.setup(opts)
+  picker.clear_catalogs()
+  review.setup()
+  local mappings = {
+    edit = { "x", ":ArkEdit<CR>", "edit selection" },
+    chat = { "n", "<cmd>ArkChat<CR>", "open agent pane" },
+    harness = { "n", "<cmd>ArkHarness<CR>", "pick harness, model, effort" },
+    focus = { "n", "<cmd>ArkFocus<CR>", "focus agent pane" },
+  }
+  for name, mapping in pairs(mappings) do
+    local key = config.options.keymaps[name]
+    if key then vim.keymap.set(mapping[1], key, mapping[2], { silent = true, desc = "ark: " .. mapping[3] }) end
+  end
+end
+
+-- Prepare and validate everything before a running conversation can end.
+-- Temporary files belong to this launch and are removed by the wrapper when
+-- its child exits, or explicitly on launch/confirmation failure.
+local function prepare(selection, prompt, ctx)
+  local files = {}
+  local function cleanup()
+    for _, path in ipairs(files) do vim.fn.delete(path) end
+  end
+  local function temporary(text)
     local path = vim.fn.tempname()
-    assert(vim.fn.writefile(vim.split(prompt, "\n", { plain = true }), path) == 0)
-    argv = vim.list_extend({ "sh", "-c", 'p=$(cat "$0") && rm "$0" && exec "$@" "$p"', path }, argv)
+    files[#files + 1] = path
+    if vim.fn.writefile(vim.split(text, "\n", { plain = true }), path) ~= 0 then error("ark: could not write launch file") end
+    return path
   end
-  return tmux.spawn(root, argv, config.options.pane.size)
-end
-
-local function dispatch(message)
-  local root = project_root()
-  local pane = tmux.find_pane(root)
-  if pane then
-    tmux.send(pane, message)
-  else
-    pane = launch(root, message)
-  end
-  sync.start(config.options.checktime_interval)
-  vim.notify(("ark: sent to %s"):format(pane))
-end
-
--- Prompts for an instruction and sends it with the selected lines.
--- range: { start_line, end_line }, 1-based and inclusive.
-function M.edit(range)
-  local buf = vim.api.nvim_get_current_buf()
-  local root = project_root()
-  local ctx = context.selection(buf, root, range)
-
-  vim.ui.input({ prompt = "Ark edit: " }, function(input)
-    if not input or vim.trim(input) == "" then
-      return
+  local ok, argv = pcall(function()
+    local harness = config.harness(selection.harness)
+    if vim.fn.executable(harness.cmd[1]) ~= 1 then error("ark: harness executable is missing: " .. harness.cmd[1]) end
+    local args = vim.deepcopy(harness.cmd)
+    local instructions = table.concat(vim.fn.readfile(config.instructions_path), "\n")
+    if ctx then instructions = instructions .. "\n\n" .. ctx end
+    local instructions_file = ""
+    if harness.instructions_args then
+      local path = config.instructions_path
+      if ctx then instructions_file = temporary(instructions); path = instructions_file end
+      vim.list_extend(args, harness.instructions_args(path))
+    else
+      prompt = prompt and (instructions .. "\n\n" .. prompt) or instructions
     end
-    -- The agent reads and edits the file on disk, so it must match the buffer.
-    vim.api.nvim_buf_call(buf, function()
-      vim.cmd("silent update")
-    end)
-    dispatch(ctx .. "\n\n<request>\n" .. input .. "\n</request>")
+    if selection.model then
+      if not harness.model_args then error("ark: harness has no model_args adapter") end
+      vim.list_extend(args, harness.model_args(selection.model))
+    end
+    if selection.effort then
+      if not harness.effort_args then error("ark: harness has no effort_args adapter") end
+      vim.list_extend(args, harness.effort_args(selection.effort))
+    end
+    local prompt_file = ""
+    if prompt then
+      if harness.prompt_flag then table.insert(args, harness.prompt_flag) end
+      prompt_file = temporary(prompt)
+    end
+    for _, arg in ipairs(args) do
+      if type(arg) ~= "string" or arg:find("\0", 1, true) then error("ark: launch arguments must be strings without NUL bytes") end
+    end
+    local script = [[instructions=$1; prompt_file=$2; shift 2
+trap 'if [ -n "$instructions" ]; then rm -f -- "$instructions"; fi; if [ -n "$prompt_file" ]; then rm -f -- "$prompt_file"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+if [ -n "$prompt_file" ]; then
+  p=$(cat -- "$prompt_file") || exit
+  rm -f -- "$prompt_file"
+  "$@" "$p"
+else
+  "$@"
+fi]]
+    return vim.list_extend({ "sh", "-c", script, "ark-launch", instructions_file, prompt_file }, args)
+  end)
+  if not ok then cleanup(); error(argv) end
+  return { argv = argv, cleanup = cleanup, selection = vim.deepcopy(selection) }
+end
+
+local function spawn(root, launch, done)
+  tmux.spawn(root, launch.argv, config.options.pane.size, function(err, pane)
+    if err then launch.cleanup() end
+    done(err, pane)
+  end, { selection = launch.selection })
+end
+
+-- range is captured with its buffer and project before asynchronous input.
+function M.edit(range)
+  local root, buf = root_directory(), vim.api.nvim_get_current_buf()
+  local path = vim.api.nvim_buf_get_name(buf)
+  local tick = vim.api.nvim_buf_get_changedtick(buf)
+  context.validate(buf, range)
+  range = vim.deepcopy(range)
+  operation(root, function(finish, guarded)
+    tmux.find_pane(root, guarded(function(err, pane)
+      if err then sync.stop(root); return finish(err) end
+      vim.ui.input({ prompt = "Ark edit: " }, guarded(function(input)
+        if not input or vim.trim(input) == "" then return finish() end
+        if not vim.api.nvim_buf_is_loaded(buf) or vim.api.nvim_buf_get_name(buf) ~= path
+          or vim.api.nvim_buf_get_changedtick(buf) ~= tick then
+          return finish("ark: selected buffer changed while entering the request; select it again")
+        end
+        vim.api.nvim_buf_call(buf, function() vim.cmd("silent update") end)
+        if not vim.api.nvim_buf_is_loaded(buf) or vim.api.nvim_buf_get_name(buf) ~= path or vim.bo[buf].modified then
+          return finish("ark: save did not leave the selected buffer synchronized with disk")
+        end
+        local ctx = context.selection(buf, root, range)
+        local message = ctx .. "\n\n<request>\n" .. input .. "\n</request>"
+        local function sent(send_err, destination)
+          if send_err then return finish(send_err) end
+          watch(root)
+          vim.notify("ark: sent to " .. (pane or destination))
+          finish()
+        end
+        if pane then
+          tmux.send(pane, message, guarded(sent))
+        else
+          spawn(root, prepare(state.load(), message), guarded(sent))
+        end
+      end))
+    end))
   end)
 end
 
--- Focuses the project's agent pane, starting the selected harness if none is
--- running. When the current buffer is a file, a running agent gets its context
--- pasted into its input, unsent, ahead of whatever the user types next; a new
--- agent gets it with its instructions.
-function M.chat()
-  local buf = vim.api.nvim_get_current_buf()
-  local root = project_root()
+local function open_agent(include_context)
+  local root, buf = root_directory(), vim.api.nvim_get_current_buf()
   local ctx
-  if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
-    ctx = context.file(buf, root)
-  end
-  local pane = tmux.find_pane(root)
-  if pane then
-    if ctx then
-      tmux.paste(pane, ctx .. "\n\n")
+  if include_context and vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then ctx = context.file(buf, root) end
+  operation(root, function(finish, guarded)
+    local function focus(pane)
+      tmux.focus(pane, guarded(function(err)
+        if err then return finish(err) end
+        watch(root)
+        finish()
+      end))
     end
-  else
-    pane = launch(root, nil, ctx)
-  end
-  sync.start(config.options.checktime_interval)
-  tmux.focus(pane)
+    tmux.find_pane(root, guarded(function(err, pane)
+      if err then sync.stop(root); return finish(err) end
+      if pane then
+        if ctx then tmux.paste(pane, ctx .. "\n\n", guarded(function(paste_err)
+          if paste_err then return finish(paste_err) end
+          focus(pane)
+        end)) else focus(pane) end
+      else
+        spawn(root, prepare(state.load(), nil, ctx), guarded(function(spawn_err, candidate)
+          if spawn_err then return finish(spawn_err) end
+          focus(candidate)
+        end))
+      end
+    end))
+  end)
 end
 
--- Starts every harness's catalog command in the background. Returns a
--- function that yields the parsed catalog for a harness, waiting only if its
--- command has not finished yet. A failed command errors when that harness is
--- picked, not when the picker opens.
-local function fetch_catalogs()
-  local jobs = {}
-  for name, harness in pairs(config.options.harnesses) do
-    if harness.catalog_args then
-      local argv = vim.list_extend(vim.deepcopy(harness.cmd), harness.catalog_args)
-      local ok, job = pcall(vim.system, argv, { text = true })
-      jobs[name] = { argv = argv, ok = ok, job = job }
-    end
-  end
-  return function(name)
-    local harness = config.harness(name)
-    if not harness.catalog_args then
-      return harness.catalog()
-    end
-    local job = jobs[name]
-    local argv = table.concat(job.argv, " ")
-    if not job.ok then
-      error(("ark: `%s` failed: %s"):format(argv, job.job))
-    end
-    local result = job.job:wait()
-    if result.code ~= 0 then
-      error(("ark: `%s` failed: %s"):format(argv, vim.trim(result.stderr)))
-    end
-    return harness.catalog(result.stdout)
-  end
-end
+function M.chat() open_agent(true) end
+function M.focus() open_agent(false) end
 
--- Items for `values` with a leading "default" entry (nil = the CLI's own
--- default), marking `current`. Also returns the index of the current item, or
--- of `preferred` when nothing is current.
 local function with_default(values, current, preferred)
   local items, selected = {}, nil
   for _, value in ipairs(vim.list_extend({ vim.NIL }, values)) do
     value = value ~= vim.NIL and value or nil
     local label = value or "default"
-    if value == current then
-      label = label .. " (current)"
-      selected = #items + 1
-    elseif value == preferred and not selected then
-      selected = #items + 1
-    end
+    if value == current then label = label .. " (current)"; selected = #items + 1
+    elseif value == preferred and not selected then selected = #items + 1 end
     table.insert(items, { value = value, label = label })
   end
   return items, selected
 end
 
--- Picks harness, model, and effort in one picker, saves the selection, and
--- restarts this project's agent pane (ending its conversation) if one is
--- running.
-function M.pick_harness()
-  local current = state.load()
-  local catalog = fetch_catalogs()
-
+function M.pick_harness(refresh)
+  local root, current = root_directory(), state.load()
   local function finish(selection)
-    state.save(selection)
-    local root = project_root()
-    local pane = tmux.find_pane(root)
-    if pane then
-      tmux.kill(pane)
-      launch(root)
-    end
-    vim.notify("ark: " .. state.describe(selection) .. (pane and " (agent pane restarted)" or ""))
+    if vim.deep_equal(state.load(), selection) then vim.notify("ark: selection unchanged"); return end
+    operation(root, function(done, guarded)
+      tmux.find_pane(root, guarded(function(err, pane)
+        if err then sync.stop(root); return done(err) end
+        if not pane then
+          local launch = prepare(selection)
+          launch.cleanup()
+          state.save(selection)
+          vim.notify("ark: " .. state.describe(selection))
+          return done()
+        end
+        local previous = state.load()
+        local launch = prepare(selection)
+        local confirmation = "End conversation and replace agent"
+        vim.ui.select({ "Cancel", confirmation }, {
+          prompt = "Ark: changing to " .. state.describe(selection) .. " ends this pane's conversation",
+        }, guarded(function(choice)
+          if choice ~= confirmation then launch.cleanup(); return done() end
+          spawn(root, launch, guarded(function(spawn_err, candidate)
+            if spawn_err then return done(spawn_err) end
+            local saved, save_err = pcall(state.save, selection)
+            local function discard(message)
+              tmux.kill(candidate, guarded(function(cleanup_err)
+                launch.cleanup()
+                done(message .. (cleanup_err and ("; candidate cleanup failed: " .. cleanup_err) or ""))
+              end))
+            end
+            if not saved then return discard(tostring(save_err)) end
+            tmux.kill(pane, guarded(function(kill_err)
+              if kill_err then
+                local restored, restore_err = pcall(state.save, previous)
+                return discard(kill_err .. (not restored and ("; preference rollback failed: " .. tostring(restore_err)) or ""))
+              end
+              watch(root)
+              vim.notify("ark: " .. state.describe(selection) .. " (agent pane replaced)")
+              done()
+            end))
+          end))
+        end))
+      end))
+    end)
   end
-
-  -- The current harness first, then the rest in configured order.
   local harness_items = { { value = current.harness, label = current.harness .. " (current)" } }
   for _, name in ipairs(config.harness_order()) do
-    if name ~= current.harness then
-      table.insert(harness_items, { value = name, label = name })
-    end
+    if name ~= current.harness then table.insert(harness_items, { value = name, label = name }) end
   end
-
-  picker.run({
-    title = "Ark harness",
-    items = harness_items,
-    select = function(name)
-      local same = name == current.harness
-      local models = catalog(name)
-      local efforts_for = {}
-      for _, model in ipairs(models.models) do
-        efforts_for[model.id] = model.efforts
-      end
-      local model_items, model_selected = with_default(
-        vim.tbl_map(function(m)
-          return m.id
-        end, models.models),
-        same and current.model
-      )
-      return {
-        title = name .. " model",
-        items = model_items,
-        selected = model_selected,
-        select = function(model)
-          local efforts
-          if model then
-            efforts = efforts_for[model]
-          else
-            efforts = models.default_efforts
-          end
-          if not efforts then
-            return finish({ harness = name, model = model })
-          end
-          local effort_items, effort_selected = with_default(efforts, same and current.effort, "medium")
-          return {
-            title = name .. " effort",
-            items = effort_items,
-            selected = effort_selected,
-            select = function(effort)
-              finish({ harness = name, model = model, effort = effort })
-            end,
-          }
-        end,
-      }
-    end,
-  })
+  picker.run({ title = "Ark harness", items = harness_items, select = function(name)
+    return { title = name .. " models (loading; Esc cancels)", load = function(done)
+      return picker.catalog(name, refresh, function(err, models)
+        if err then return done(err) end
+        local same, efforts_for = name == current.harness, {}
+        for _, model in ipairs(models.models) do efforts_for[model.id] = model.efforts end
+        local model_items, selected = with_default(vim.tbl_map(function(m) return m.id end, models.models), same and current.model)
+        done(nil, { title = name .. " model", items = model_items, selected = selected, select = function(model)
+          local efforts = model and efforts_for[model] or (not model and models.default_efforts or nil)
+          if not efforts or #efforts == 0 then finish({ harness = name, model = model }); return end
+          local items, effort_selected = with_default(efforts, same and current.effort, "medium")
+          return { title = name .. " effort", items = items, selected = effort_selected, select = function(effort)
+            finish({ harness = name, model = model, effort = effort })
+          end }
+        end })
+      end)
+    end }
+  end }, function(err) status.record(root, err); error(err) end)
 end
+
+function M.status()
+  if busy[root_directory()] then error("ark: another operation is pending for " .. root_directory()) end
+  status.open(root_directory())
+end
+
+-- Observable without starting subprocesses; useful for integrations and tests.
+function M.is_busy(root) return busy[root or root_directory()] == true end
 
 return M

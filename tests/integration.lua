@@ -1,6 +1,7 @@
 local directory = vim.env.ARK_TEST_DIR
 local function wait_for(predicate, message)
-  assert(vim.wait(5000, predicate, 20), message)
+  local complete = vim.wait(5000, predicate, 20)
+  assert(complete, type(message) == "function" and message() or message)
 end
 local function read(name)
   return table.concat(vim.fn.readfile(directory .. "/" .. name, "b"), "\n")
@@ -10,6 +11,37 @@ local function ready()
 end
 local tmux = require("ark.tmux")
 local state = require("ark.state")
+local function await(invoke)
+  local done, failure, result
+  invoke(function(err, value)
+    assert(not done, "transport callback ran twice")
+    done, failure, result = true, err, value
+  end)
+  wait_for(function() return done end, "transport callback did not complete")
+  assert(not failure, failure)
+  return result
+end
+local function find(root)
+  return await(function(cb) tmux.find_pane(root, cb) end)
+end
+local function focus(pane)
+  return await(function(cb) tmux.focus(pane, cb) end)
+end
+local function kill(pane)
+  return await(function(cb) tmux.kill(pane, cb) end)
+end
+local function idle(root)
+  wait_for(function() return not require("ark").is_busy(root) end, "workflow did not finish")
+end
+local function command(value)
+  local root = vim.fn.getcwd()
+  idle(root)
+  local status = require("ark.status")
+  local before = status.last_error(root)
+  vim.cmd(value)
+  idle(root)
+  assert(vim.deep_equal(status.last_error(root), before), "unexpected workflow failure")
+end
 local function active_pane()
   return vim.trim(vim.system({ "tmux", "display-message", "-p", "#{pane_id}" }, { text = true }):wait().stdout)
 end
@@ -32,7 +64,7 @@ local function test()
     state.save({ harness = kind, model = "example", effort = kind ~= "agy" and "high" or nil })
     vim.fn.delete(directory .. "/ready")
     vim.g.ark_test_request = request
-    vim.cmd("1ArkEdit")
+    command("1ArkEdit")
     ready()
     local argv = vim.json.decode(read("argv.json"))
     local prompt = argv[#argv]
@@ -49,29 +81,64 @@ local function test()
       assert(argv[1] == (kind == "claude" and "--append-system-prompt-file"
         or kind == "pi" and "--append-system-prompt" or "-c"))
     end
-    local pane = assert(tmux.find_pane(root))
+    local pane = assert(find(root))
+    local runtime = await(function(cb) tmux.inspect(pane, cb) end)
+    assert(runtime.selection.harness == kind and runtime.selection.model == "example")
     assert(active_pane() == vim.env.TMUX_PANE, "edit must keep editor focus")
     vim.fn.delete(directory .. "/stdin.bin")
-    require("ark").chat()
-    assert(active_pane() == pane, "chat must focus the existing pane")
+    command("ArkChat")
+    wait_for(function() return active_pane() == pane end, "chat must focus the existing pane")
     wait_for(function()
       return vim.fn.filereadable(directory .. "/stdin.bin") == 1
         and read("stdin.bin"):find("\27[200~<editor_context>\nfile: sample.txt\n</editor_context>\n\n\27[201~", 1, true)
     end, "chat must paste the file context")
     assert(not read("stdin.bin"):find("\r", 1, true), "chat must not submit the file context")
-    tmux.focus(vim.env.TMUX_PANE)
+    focus(vim.env.TMUX_PANE)
+    local context_bytes = read("stdin.bin")
+    command("ArkFocus")
+    assert(active_pane() == pane, "ArkFocus must focus the existing pane")
+    vim.wait(40, function() return false end, 5)
+    assert(read("stdin.bin") == context_bytes, "ArkFocus must not paste context")
+    focus(vim.env.TMUX_PANE)
     vim.fn.delete(directory .. "/stdin.bin")
-    vim.cmd("1ArkEdit")
+    command("1ArkEdit")
     wait_for(function() return vim.fn.filereadable(directory .. "/stdin.bin") == 1 end, "follow-up not received")
     wait_for(function()
       local bytes = read("stdin.bin")
       return bytes:find("\27[200~", 1, true) and bytes:find("\27[201~\r", 1, true)
     end, "follow-up must be one bracketed paste and Enter")
     assert(read("stdin.bin"):find(request, 1, true))
-    assert(tmux.find_pane(root) == pane, "follow-up must reuse the agent pane")
-    assert(tmux.find_pane(root .. "/other") == nil, "another project must not reuse this pane")
-    tmux.kill(pane)
+    assert(find(root) == pane, "follow-up must reuse the agent pane")
+    assert(find(root .. "/other") == nil, "another project must not reuse this pane")
+    kill(pane)
   end
+
+  -- Build context after BufWritePre formatting and retain the captured project
+  -- when an asynchronous input provider changes Neovim's working directory.
+  local other_root = directory .. "/other project"
+  vim.fn.mkdir(other_root, "p")
+  vim.fn.delete(directory .. "/ready")
+  vim.api.nvim_buf_set_lines(0, 0, 1, false, { "unformatted selection" })
+  vim.api.nvim_create_autocmd("BufWritePre", { buffer = 0, once = true, callback = function()
+    vim.api.nvim_buf_set_lines(0, 0, 1, false, { "formatted selection" })
+  end })
+  local original_input = vim.ui.input
+  vim.ui.input = function(_, callback)
+    vim.cmd.cd(other_root)
+    callback("capture original project")
+  end
+  command("1ArkEdit")
+  vim.ui.input = original_input
+  ready()
+  local formatted_argv = vim.json.decode(read("argv.json"))
+  local formatted_prompt = formatted_argv[#formatted_argv]
+  assert(formatted_prompt:find("1: formatted selection", 1, true), "context must use saved formatter output")
+  assert(not formatted_prompt:find("unformatted selection", 1, true))
+  assert(formatted_prompt:find("workspace: " .. root, 1, true), "request must retain its captured project")
+  assert(read("saved.txt") == "formatted selection\nsecond line\n")
+  assert(find(other_root) == nil, "directory changes must not redirect a pending request")
+  kill(assert(find(root)))
+  vim.cmd.cd(root)
 
   -- A fake agent edits on disk; the plugin's timer must reload the buffer.
   vim.cmd.stopinsert()
@@ -79,7 +146,7 @@ local function test()
   assert(not vim.bo.modified, "edit must save the file buffer")
   vim.fn.delete(directory .. "/ready")
   vim.fn.delete(directory .. "/stdin.bin")
-  vim.cmd("ArkChat")
+  command("ArkChat")
   ready()
   local argv = vim.json.decode(read("argv.json"))
   assert(argv[1] == "--append-system-prompt" and argv[#argv] == "high", "a new chat must not start with a prompt")
@@ -88,9 +155,9 @@ local function test()
   assert(instructions:find("\n\n<editor_context>\nfile: sample.txt\n</editor_context>$"),
     "a new chat must get the file context with its instructions")
   assert(vim.fn.filereadable(directory .. "/stdin.bin") == 0, "a new chat must not paste")
-  tmux.focus(vim.env.TMUX_PANE)
+  focus(vim.env.TMUX_PANE)
   vim.g.ark_test_request = "ARK_TEST_EDIT_FILE"
-  vim.cmd("1ArkEdit")
+  command("1ArkEdit")
   wait_for(function() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == "agent edit" end, "buffer did not reload")
 
   -- Drive the real Telescope picker through all three steps.
@@ -110,22 +177,38 @@ local function test()
     end, "picker value missing: " .. tostring(value))
     picker:set_selection(index - 1)
     actions.select_default(buffer)
+    idle()
   end
   local function open_pi()
     vim.cmd("ArkHarness")
     choose("pi")
   end
-  local previous_pane = assert(tmux.find_pane(root))
+  local previous_pane = assert(find(root))
   open_pi()
   choose("example/plain")
   wait_for(function() return vim.bo.filetype ~= "TelescopePrompt" end, "plain model should skip effort picker")
   assert(state.load().model == "example/plain" and state.load().effort == nil)
-  assert(tmux.find_pane(root) ~= previous_pane, "changing harness selection must restart the agent pane")
+  assert(find(root) ~= previous_pane, "changing harness selection must restart the agent pane")
   open_pi()
   choose("example/reasoning")
   choose("high")
   wait_for(function() return vim.bo.filetype ~= "TelescopePrompt" end, "picker did not close")
   assert(state.load().effort == "high")
+  local unchanged_pane, unchanged_state = assert(find(root)), state.load()
+  local confirmations = _G.ark_test_confirmations
+  open_pi()
+  choose("example/reasoning")
+  choose("high")
+  assert(find(root) == unchanged_pane and vim.deep_equal(state.load(), unchanged_state),
+    "same selection must retain pane and state")
+  assert(_G.ark_test_confirmations == confirmations, "same selection must not ask for confirmation")
+  vim.g.ark_test_confirm = false
+  open_pi()
+  choose("example/plain")
+  vim.g.ark_test_confirm = nil
+  assert(find(root) == unchanged_pane and vim.deep_equal(state.load(), unchanged_state),
+    "cancelled replacement must retain pane and state")
+  assert(_G.ark_test_confirmations == confirmations + 1, "replacement must ask for confirmation")
   open_pi()
   choose(nil)
   choose(nil)
@@ -149,7 +232,10 @@ local function test()
       end
       return table.concat(shown, ",") == table.concat(values, ",")
         and (picker:get_selection().value or "default") == selected
-    end, "picker shows " .. table.concat(shown or {}, ",") .. ", want " .. table.concat(values, ",") .. " at " .. selected)
+    end, function()
+      return "picker shows " .. table.concat(shown or {}, ",") .. ", want " .. table.concat(values, ",")
+        .. " at " .. selected .. "; selected=" .. vim.inspect(picker:get_selection())
+    end)
   end
   state.save({ harness = "pi", model = "example/reasoning", effort = "high" })
   local pi_efforts = { "default", "off", "minimal", "low", "medium", "high", "xhigh", "max" }
@@ -178,3 +264,4 @@ end
 
 local ok, err = xpcall(test, debug.traceback)
 vim.fn.writefile(vim.split(ok and "PASS" or err, "\n", { plain = true }), directory .. "/result")
+vim.cmd("qa!")
