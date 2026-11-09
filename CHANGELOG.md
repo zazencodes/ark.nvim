@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed saved preferences to use validated, atomic writes and report invalid state explicitly
+
 ## [0.2.0] - 2026-10-07
 
 ### Breaking Changes

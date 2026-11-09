@@ -36,6 +36,8 @@ def main():
         def tmux(*args, **kwargs):
             return run(["tmux", "-L", socket, *args], env=env, **kwargs)
 
+        run(["nvim", "--headless", "-u", "NONE", "-l", str(ROOT / "tests/state.lua")],
+            env=env, timeout=30)
         (directory / "sample.txt").write_text("first line\nsecond line\n")
         try:
             command = shlex.join(["nvim", "-u", str(ROOT / "tests/init.lua"), "sample.txt"])

@@ -96,6 +96,8 @@ To start a new conversation, use the agent's own `/clear`. To end it, exit the a
 
 The picker lists the current harness first, then the others in `harness_order`. Every model and effort list starts with `default`, which passes no flag, so the CLI uses its own configured default. The cursor starts on the current model and effort, or on `medium` when the effort list has no current entry. The selection is saved in `stdpath("state")/ark.json` and applies to every project.
 
+Saved preferences are validated and replaced atomically; an invalid `ark.json` must be repaired or removed before retrying.
+
 ## Configuration
 
 These are the defaults. Pass only what you want to change.
