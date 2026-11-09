@@ -69,9 +69,8 @@ function M.setup(opts)
   review.setup()
   local mappings = {
     edit = { "x", ":ArkEdit<CR>", "edit selection" },
-    chat = { "n", "<cmd>ArkChat<CR>", "open agent pane" },
+    chat = { "n", "<cmd>ArkChat<CR>", "open agent window" },
     harness = { "n", "<cmd>ArkHarness<CR>", "pick harness, model, effort" },
-    focus = { "n", "<cmd>ArkFocus<CR>", "focus agent pane" },
   }
   for name, mapping in pairs(mappings) do
     local key = config.options.keymaps[name]
@@ -140,11 +139,11 @@ fi]]
   return { argv = argv, cleanup = cleanup, selection = vim.deepcopy(selection) }
 end
 
-local function spawn(root, launch, done)
-  tmux.spawn(root, launch.argv, config.options.pane.size, function(err, pane)
+local function spawn(root, launch, done, file)
+  tmux.spawn(root, launch.argv, function(err, pane)
     if err then launch.cleanup() end
     done(err, pane)
-  end, { selection = launch.selection })
+  end, { selection = launch.selection, file = file })
 end
 
 -- range is captured with its buffer and project before asynchronous input.
@@ -172,23 +171,25 @@ function M.edit(range)
         local function sent(send_err, destination)
           if send_err then return finish(send_err) end
           watch(root)
-          vim.notify("ark: sent to " .. (pane or destination))
+          vim.notify("ark: request sent; :ArkChat opens the agent")
           finish()
         end
         if pane then
-          tmux.send(pane, message, guarded(sent))
+          tmux.send(pane, message, guarded(sent), { file = path })
         else
-          spawn(root, prepare(state.load(), message), guarded(sent))
+          spawn(root, prepare(state.load(), message), guarded(sent), path)
         end
       end))
     end))
   end)
 end
 
-local function open_agent(include_context)
+function M.chat()
   local root, buf = root_directory(), vim.api.nvim_get_current_buf()
-  local ctx
-  if include_context and vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then ctx = context.file(buf, root) end
+  local ctx, path
+  if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+    path, ctx = vim.api.nvim_buf_get_name(buf), context.file(buf, root)
+  end
   operation(root, function(finish, guarded)
     local function focus(pane)
       tmux.focus(pane, guarded(function(err)
@@ -203,19 +204,17 @@ local function open_agent(include_context)
         if ctx then tmux.paste(pane, ctx .. "\n\n", guarded(function(paste_err)
           if paste_err then return finish(paste_err) end
           focus(pane)
-        end)) else focus(pane) end
+        end), { file = path }) else focus(pane) end
       else
         spawn(root, prepare(state.load(), nil, ctx), guarded(function(spawn_err, candidate)
           if spawn_err then return finish(spawn_err) end
           focus(candidate)
-        end))
+        end), path)
       end
     end))
   end)
 end
 
-function M.chat() open_agent(true) end
-function M.focus() open_agent(false) end
 
 local function with_default(values, current, preferred)
   local items, selected = {}, nil
@@ -247,7 +246,7 @@ function M.pick_harness(refresh)
         local launch = prepare(selection)
         local confirmation = "End conversation and replace agent"
         vim.ui.select({ "Cancel", confirmation }, {
-          prompt = "Ark: changing to " .. state.describe(selection) .. " ends this pane's conversation",
+          prompt = "Ark: changing to " .. state.describe(selection) .. " ends this agent's conversation",
         }, guarded(function(choice)
           if choice ~= confirmation then launch.cleanup(); return done() end
           spawn(root, launch, guarded(function(spawn_err, candidate)
@@ -266,7 +265,7 @@ function M.pick_harness(refresh)
                 return discard(kill_err .. (not restored and ("; preference rollback failed: " .. tostring(restore_err)) or ""))
               end
               watch(root)
-              vim.notify("ark: " .. state.describe(selection) .. " (agent pane replaced)")
+              vim.notify("ark: " .. state.describe(selection) .. " (agent replaced)")
               done()
             end))
           end))

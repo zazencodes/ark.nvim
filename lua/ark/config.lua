@@ -16,12 +16,8 @@ M.defaults = {
     edit = "<leader>ai",
     chat = "<leader>ao",
     harness = "<leader>ah",
-    focus = false,
   },
-  pane = {
-    -- Width of the agent pane, passed to `tmux split-window -l`.
-    size = "40%",
-  },
+  window = { width = 0.85, height = 0.8 },
   -- How often (ms) Neovim checks for files changed on disk by the agent.
   checktime_interval = 1000,
   catalog_timeout_ms = 10000,
@@ -87,10 +83,13 @@ function M.validate()
     if M.defaults.keymaps[name] == nil then error("ark: unknown keymap " .. tostring(name)) end
     if key ~= false and (type(key) ~= "string" or key == "") then error("ark: keymaps must be nonempty strings or false") end
   end
-  local size = type(M.options.pane) == "table" and M.options.pane.size or nil
-  local number = type(size) == "string" and size:match("^(%d+)%%?$") or size
-  if not positive_integer(tonumber(number)) or (type(size) == "string" and size:find("%%") and tonumber(number) > 100) then
-    error("ark: pane.size must be a positive integer or percentage up to 100%")
+  if M.options.pane ~= nil then error("ark: pane was removed; configure window.width and window.height") end
+  if type(M.options.window) ~= "table" then error("ark: window must be a table") end
+  for _, dimension in ipairs({ "width", "height" }) do
+    local value = M.options.window[dimension]
+    if type(value) ~= "number" or not (value > 0 and value <= 1) then
+      error("ark: window." .. dimension .. " must be a fraction greater than 0 and at most 1")
+    end
   end
 end
 

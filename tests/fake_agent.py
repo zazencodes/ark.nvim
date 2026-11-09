@@ -26,7 +26,7 @@ if args == ["--list-models"]:
 directory = Path(os.environ["ARK_TEST_DIR"])
 # Raw input preserves tmux's bracketed-paste delimiters and submit key.
 tty.setraw(sys.stdin.fileno())
-sys.stdout.write("\033[?2004h")
+sys.stdout.write("\033[?2004hARK_TEST_AGENT_READY")
 sys.stdout.flush()
 (directory / "argv.json").write_text(json.dumps(args))
 (directory / "saved.txt").write_bytes(Path("sample.txt").read_bytes())

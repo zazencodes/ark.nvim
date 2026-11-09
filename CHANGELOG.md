@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replaced adjacent agent panes with detached background sessions shared by working directory on the tmux server; `:ArkChat` now opens a centered floating terminal
+- Replaced `pane.size` with fractional `window.width` and `window.height` options (defaults 0.85 and 0.8); the removed `pane` option raises an error
+
 ### Added
 
-- Added `:ArkFocus` to focus or start the agent without adding file context, with an optional `keymaps.focus` mapping (disabled by default)
+- Added Ctrl-C to hide the agent window in terminal/normal mode, and normal-mode `q` to hide it; hiding leaves the agent working
+- Added a resizable floating terminal viewer that reconnects to the background conversation after hiding or restarting Neovim
+
 - Added `:ArkStatus` for the project, live pane, running selection, saved preference and last errors, plus `:checkhealth ark` for dependency and configuration checks
 - Added `:ArkReview` with preserved editor/before and disk snapshots in read-only diff tabs, and confirmed `:ArkResolve disk|buffer` actions that reject changes made during confirmation and can recreate deleted files from the buffer
 - Added `:ArkHarness!` to refresh the selected harness's model catalog and `catalog_timeout_ms` (default 10000)
@@ -13,11 +20,17 @@
 
 ### Changed
 
+- Unified opening the agent under `:ArkChat` (`<leader>ao`), inserting file context only when the file differs from the last successful context delivery; selection requests update that file too, and tracking survives Neovim restarts
+
 - Changed model catalogs to load asynchronously only for the selected harness, cache successful results for the Neovim session, and cancel when the picker closes
 - Changed harness replacement to prepare the new launch, ask before ending a conversation, validate a candidate and save the preference before removing the existing pane, with rollback/cleanup attempts on failure; selecting the saved preference again is a no-op
 - Changed tmux operations to run asynchronously with deadlines, serialize input per pane, and use unique paste buffers with cleanup
 - Scoped file sync to loaded buffers under active project roots, coalesced pending callbacks, and stopped sync when asynchronous checks find a missing or dead agent pane
 - Changed saved preferences to use validated, atomic writes and report invalid state explicitly
+
+### Removed
+
+- Removed `:ArkFocus`, the Lua `focus()` entry point and `keymaps.focus`; use `:ArkChat` to summon the agent
 
 ### Fixed
 

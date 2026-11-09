@@ -86,7 +86,7 @@ local function operation(name, callback, opts)
     end
     self.finished = true
     if err and self.pending_spawn and (err:find("deadline", 1, true) or err:find("timed out", 1, true)) then
-      err = err .. "; split-window may have created an untagged pane before timing out; inspect this tmux window and close the candidate"
+      err = err .. "; new-session may have created an untagged pane before timing out; inspect tmux sessions and close the candidate"
     end
     timer:stop()
     timer:close()
@@ -218,8 +218,8 @@ local function live(op, pane, callback)
     return
   end
   op:run({ "display-message", "-p", "-t", pane,
-    "#{pane_id}\t#{pane_dead}\t#{@ark_root}\t#{@ark_selection}" }, nil, function(out)
-    local id, dead, root, selection = out:match("^(%%%d+)\t([01])\t([^\t]*)\t(.*)$")
+    "#{pane_id}\t#{pane_dead}\t#{@ark_root}\t#{@ark_selection}\t#{@ark_file}" }, nil, function(out)
+    local id, dead, root, selection, file = out:match("^(%%%d+)\t([01])\t([^\t]*)\t([^\t]*)\t(.*)$")
     if id ~= pane then
       op:finish("tmux returned invalid pane metadata for " .. pane)
     elseif dead == "1" then
@@ -239,7 +239,7 @@ local function live(op, pane, callback)
         end
         metadata = decoded
       end
-      callback({ id = id, root = root ~= "" and root or nil, selection = metadata })
+      callback({ id = id, root = root ~= "" and root or nil, selection = metadata, file = file ~= "" and file or nil })
     end
   end)
 end
@@ -251,7 +251,7 @@ function M.find_pane(root, callback, opts)
     if not pane then
       return
     end
-    op:run({ "list-panes", "-s", "-t", pane, "-F", "#{pane_id}\t#{pane_dead}\t#{@ark_root}" }, nil, function(out)
+    op:run({ "list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}\t#{@ark_root}" }, nil, function(out)
       local found
       for line in vim.gsplit(out, "\n", { plain = true }) do
         local id, dead, pane_root = line:match("^(%%%d+)\t([01])\t(.*)$")
@@ -281,7 +281,7 @@ function M.inspect(pane, callback, opts)
   end)
 end
 
-function M.spawn(root, argv, size, callback, opts)
+function M.spawn(root, argv, callback, opts)
   local op = operation("spawn", callback, opts)
   start(op, nil, function()
     local parent = nvim_pane(op)
@@ -302,10 +302,6 @@ function M.spawn(root, argv, size, callback, opts)
         return
       end
     end
-    if type(size) ~= "string" and type(size) ~= "number" then
-      op:finish("spawn size must be a tmux pane size such as 40%")
-      return
-    end
     if opts and opts.selection then
       local ok, err = pcall(require("ark.state").validate, opts.selection)
       if not ok then
@@ -313,20 +309,28 @@ function M.spawn(root, argv, size, callback, opts)
         return
       end
     end
-    local args = { "split-window", "-h", "-d", "-l", size, "-t", parent, "-c", root, "-P", "-F", "#{pane_id}" }
+    local args = { "new-session", "-d", "-x", tostring(vim.o.columns), "-y", tostring(vim.o.lines),
+      "-c", root, "-P", "-F", "#{pane_id}" }
     op.pending_spawn = true
     op:run(vim.list_extend(args, argv), nil, function(id)
       op.pending_spawn = false
       if not id:match("^%%%d+$") then
-        op:finish("split-window returned an invalid pane id; inspect tmux for an untagged candidate pane")
+        op:finish("new-session returned an invalid pane id; inspect tmux for an untagged candidate pane")
         return
       end
       table.insert(op.cleanups, { "kill-pane", "-t", id })
       live(op, id, function()
         op:run({ "set-option", "-p", "-t", id, "@ark_root", root }, nil, function()
           local function ready()
-            live(op, id, function()
-              op:finish(nil, id)
+            op:run({ "set-option", "-t", id, "status", "off" }, nil, function()
+              op:run({ "set-option", "-t", id, "destroy-unattached", "off" }, nil, function()
+                op:run({ "set-option", "-w", "-t", id, "remain-on-exit", "off" }, nil, function()
+                  local function complete() live(op, id, function() op:finish(nil, id) end) end
+                  if opts and opts.file then
+                    op:run({ "set-option", "-p", "-t", id, "@ark_file", opts.file }, nil, complete)
+                  else complete() end
+                end)
+              end)
             end)
           end
           if opts and opts.selection then
@@ -361,15 +365,23 @@ end
 local function input(name, pane, text, callback, opts)
   local op = operation(name, callback, opts)
   start(op, pane, function()
-    live(op, pane, function()
-      paste(op, pane, text, function()
-        if name == "send" then
-          op:run({ "send-keys", "-t", pane, "Enter" }, nil, function()
+    live(op, pane, function(info)
+      -- Chat only inserts context when the file changes. Keep the comparison,
+      -- paste and metadata update in the same per-pane input queue.
+      if name == "paste" and opts and opts.file and info.file == opts.file then
+        return op:finish(nil, true)
+      end
+      local function complete()
+        if opts and opts.file then
+          op:run({ "set-option", "-p", "-t", pane, "@ark_file", opts.file }, nil, function()
             op:finish(nil, true)
           end)
-        else
-          op:finish(nil, true)
-        end
+        else op:finish(nil, true) end
+      end
+      paste(op, pane, text, function()
+        if name == "send" then
+          op:run({ "send-keys", "-t", pane, "Enter" }, nil, complete)
+        else complete() end
       end)
     end)
   end)
@@ -399,10 +411,12 @@ function M.focus(pane, callback, opts)
   local op = operation("focus", callback, opts)
   start(op, pane, function()
     live(op, pane, function()
-      op:run({ "select-window", "-t", pane }, nil, function()
-        op:run({ "select-pane", "-t", pane }, nil, function()
-          op:finish(nil, true)
-        end)
+      op:run({ "display-message", "-p", "-t", pane, "#{session_id}\t#{socket_path}" }, nil, function(out)
+        local session, socket = out:match("^(%$%d+)\t(.+)$")
+        if not session then return op:finish("invalid session metadata for " .. pane) end
+        local ok, err = pcall(require("ark.terminal").open, pane, socket, session)
+        if not ok then return op:finish(tostring(err)) end
+        op:finish(nil, true)
       end)
     end)
   end)

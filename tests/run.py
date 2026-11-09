@@ -58,6 +58,25 @@ def main():
                 time.sleep(0.1)
             result = (directory / "result").read_text().strip()
             assert result == "PASS", result
+            # Reopen Neovim in a different outer session on the same server.
+            # The original Neovim has quit; the background agent must survive.
+            deadline = time.monotonic() + 5
+            while subprocess.run(["tmux", "-L", socket, "has-session", "-t", "=test"],
+                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                if time.monotonic() > deadline:
+                    raise AssertionError("original Neovim did not exit")
+                time.sleep(0.05)
+            tmux("new-session", "-d", "-s", "reconnect", "-x", "180", "-y", "45",
+                 "-c", str(directory), command)
+            tmux("send-keys", "-t", "reconnect:0.0", "-l",
+                 ":lua dofile(vim.env.ARK_TEST_ROOT .. '/tests/reconnect.lua')")
+            tmux("send-keys", "-t", "reconnect:0.0", "Enter")
+            deadline = time.monotonic() + 15
+            while not (directory / "reconnect-result").exists():
+                if time.monotonic() > deadline:
+                    raise AssertionError("reconnection tests timed out")
+                time.sleep(0.1)
+            assert (directory / "reconnect-result").read_text().strip() == "PASS", (directory / "reconnect-result").read_text()
             # Read the saved selection in a separate Neovim process.
             check = directory / "persist.lua"
             check.write_text('vim.opt.rtp:prepend(vim.env.ARK_TEST_ROOT)\n'
@@ -65,7 +84,7 @@ def main():
                              'assert(s.harness=="pi" and s.model=="example/reasoning" and s.effort=="high")\n')
             run(["nvim", "--headless", "-u", "NONE", "-l", str(check)], env=env, timeout=10)
             print("PASS: all adapters, async transport, focus, metadata, Telescope, replacement/no-op/cancel, "
-                  "format-on-save, captured cwd, reloads, persisted state")
+                  "format-on-save, captured cwd, reloads, persisted state, floating input/hide/reopen and Neovim restart")
         except Exception:
             subprocess.run(["tmux", "-L", socket, "capture-pane", "-p", "-t", "test:0.0"],
                            env=env, check=False)

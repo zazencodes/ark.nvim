@@ -12,15 +12,11 @@ end, { range = true, desc = "Ask the agent to edit the selected lines" })
 
 vim.api.nvim_create_user_command("ArkChat", function()
   require("ark").chat()
-end, { desc = "Open the agent pane, starting it if needed" })
+end, { desc = "Open the agent window, starting it if needed" })
 
 vim.api.nvim_create_user_command("ArkHarness", function(opts)
   require("ark").pick_harness(opts.bang)
 end, { bang = true, desc = "Pick harness, model, effort (! refreshes its catalog)" })
-
-vim.api.nvim_create_user_command("ArkFocus", function()
-  require("ark").focus()
-end, { desc = "Focus or start the agent pane without pasting context" })
 
 vim.api.nvim_create_user_command("ArkStatus", function()
   require("ark").status()

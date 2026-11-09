@@ -1,6 +1,6 @@
 # AGENTS.md
 
-ark.nvim: Neovim plugin (Lua, Neovim ≥ 0.11.7) that sends editor context to a coding agent CLI running in an adjacent tmux pane. See `README.md` for behavior.
+ark.nvim: Neovim plugin (Lua, Neovim ≥ 0.11.7) that sends editor context to a coding agent CLI running in a detached tmux session with a summonable floating terminal. See `README.md` for behavior.
 
 ## Project Instructions
 
@@ -17,7 +17,8 @@ ark.nvim: Neovim plugin (Lua, Neovim ≥ 0.11.7) that sends editor context to a 
 - `lua/ark/picker.lua`: multi-step Telescope picker. Steps swap in the same window.
 - `lua/ark/state.lua`: the persisted harness/model/effort selection (`stdpath("state")/ark.json`).
 - `lua/ark/context.lua`: builds the `<editor_context>` block.
-- `lua/ark/tmux.lua`: all tmux calls. The agent pane is found via the `@ark_root` pane option, with no in-memory session state.
+- `lua/ark/tmux.lua`: asynchronous tmux transport and detached session launch. The agent pane is found server-wide via `@ark_root`, with no in-memory agent session state.
+- `lua/ark/terminal.lua`: floating terminal viewer attached to the agent session; hiding the viewer leaves the agent running.
 - `lua/ark/sync.lua`: `checktime` timer for reloading agent-edited buffers.
 - `instructions.md`: static instructions given to every agent at launch.
 - `.agents/skills/`: repo skills (`.claude/skills` links to it).

@@ -28,7 +28,7 @@ local fake_tmux = {
   end,
   paste = function(_, _, cb) calls[#calls + 1] = "paste"; cb(nil, true) end,
   focus = function(_, cb) calls[#calls + 1] = "focus"; cb(nil, true) end,
-  spawn = function(_, _, _, cb) calls[#calls + 1] = "spawn"; cb(nil, "%candidate") end,
+  spawn = function(_, _, cb) calls[#calls + 1] = "spawn"; cb(nil, "%candidate") end,
   kill = function(target, cb)
     calls[#calls + 1] = "kill:" .. target
     cb(kill_error and target == "%old" and "ark: injected old kill failure" or nil, true)
@@ -110,13 +110,13 @@ local ok, err = xpcall(function()
   assert(selection.harness == "other")
   assert(table.concat(calls, ","):find("spawn,save:other,kill:%%old"), "unsafe replacement order")
   reset()
-  ark.focus()
-  assert(has("focus") and not has("paste"), "focus pasted context")
+  ark.chat()
+  assert(has("focus") and has("paste"), "chat must offer current file context")
   reset()
   -- Simulate a scheduled transport callback: an error must escape its guarded
   -- wrapper, be recorded, and release the project lock.
   pending_find = true
-  ark.focus()
+  ark.chat()
   local callback = pending_find
   pending_find = nil
   local emitted

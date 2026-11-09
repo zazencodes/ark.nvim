@@ -5,18 +5,20 @@ local original_tmux, original_pane = vim.env.TMUX, vim.env.TMUX_PANE
 vim.env.TMUX, vim.env.TMUX_PANE = "ark-test", "%1"
 local calls, buffers, pastes, killed = {}, {}, {}, {}
 local handler
-local metadata = {}
+local metadata, files = {}, {}
 local function default(args, opts)
   local command = args[2]
   if command == "display-message" then
     local pane = args[5]
-    return { stdout = pane .. "\t0\t/project\t" .. (metadata[pane] or "") }
+    return { stdout = pane .. "\t0\t/project\t" .. (metadata[pane] or "") .. "\t" .. (files[pane] or "") }
   elseif command == "list-panes" then
     return { stdout = "%2\t0\t/project\n" }
-  elseif command == "split-window" then
+  elseif command == "new-session" then
     return { stdout = "%9" }
   elseif command == "set-option" and args[6] == "@ark_selection" then
     metadata[args[5]] = args[7]
+  elseif command == "set-option" and args[6] == "@ark_file" then
+    files[args[5]] = args[7]
   elseif command == "load-buffer" then
     buffers[args[4]] = opts.stdin
   elseif command == "paste-buffer" then
@@ -49,6 +51,7 @@ local tmux = require("ark.tmux")
 local function reset()
   calls, buffers, pastes, killed, metadata = {}, {}, {}, {}, {}
   handler = nil
+  files = {}
 end
 local function capture(invoke)
   local result = { count = 0 }
@@ -89,7 +92,7 @@ local ok, err = xpcall(function()
   handler = function() return { stdout = "%2\t0\t/project\n%3\t0\t/project" } end
   failure(function(cb) tmux.find_pane("/project", cb) end, "multiple agent panes")
   reset()
-  handler = function() return { stdout = "%2\t1\t/project\t" } end
+  handler = function() return { stdout = "%2\t1\t/project\t\t" } end
   failure(function(cb) tmux.send("%2", "hello", cb) end, "is dead")
   assert(not has("load-buffer"))
   reset()
@@ -160,6 +163,21 @@ local ok, err = xpcall(function()
   end
   assert(table.concat(actions, ",") == "load-buffer,paste-buffer,send-keys,load-buffer,paste-buffer,send-keys")
   reset()
+  -- File context follows successful delivery and is deduplicated per agent.
+  success(function(cb) tmux.send("%2", "selection", cb, { file = "/project/a.lua" }) end)
+  assert(files["%2"] == "/project/a.lua")
+  local count = #pastes
+  success(function(cb) tmux.paste("%2", "same file", cb, { file = "/project/a.lua" }) end)
+  assert(#pastes == count, "chat duplicated the last selection's file")
+  success(function(cb) tmux.paste("%2", "new file", cb, { file = "/project/b.lua" }) end)
+  assert(#pastes == count + 1 and files["%2"] == "/project/b.lua")
+  handler = function(args, opts)
+    if args[2] == "paste-buffer" then return { code = 1, stderr = "paste failed" } end
+    return default(args, opts)
+  end
+  failure(function(cb) tmux.paste("%2", "failed", cb, { file = "/project/c.lua" }) end, "paste failed")
+  assert(files["%2"] == "/project/b.lua", "failed paste advanced file context")
+  reset()
   -- Queue time counts toward the caller's deadline and never starts expired work.
   handler = function(args, opts)
     local output = default(args, opts)
@@ -193,10 +211,10 @@ local ok, err = xpcall(function()
   assert(has("delete-buffer") and vim.tbl_isempty(buffers))
   reset()
   handler = function(args, opts)
-    if args[2] == "split-window" then return { hang = true } end
+    if args[2] == "new-session" then return { hang = true } end
     return default(args, opts)
   end
-  failure(function(cb) tmux.spawn("/project", { "fake-agent" }, "40%", cb, { timeout_ms = 10 }) end,
+  failure(function(cb) tmux.spawn("/project", { "fake-agent" }, cb, { timeout_ms = 10 }) end,
     "may have created an untagged pane")
   assert(not has("kill-pane"), "a split timeout must never kill the existing pane")
   reset()
@@ -204,23 +222,32 @@ local ok, err = xpcall(function()
     if args[2] == "set-option" then return { code = 1, stderr = "tagging failed" } end
     return default(args, opts)
   end
-  failure(function(cb) tmux.spawn("/project", { "fake-agent" }, "40%", cb) end, "tagging failed")
+  failure(function(cb) tmux.spawn("/project", { "fake-agent" }, cb) end, "tagging failed")
   assert(has("kill-pane"))
   for _, args in ipairs(calls) do
     if args[2] == "kill-pane" then assert(args[4] == "%9", "old pane was killed") end
   end
   reset()
   local selection = { harness = "pi", model = "example/model", effort = "high" }
-  assert(success(function(cb) tmux.spawn("/project", { "fake-agent" }, "40%", cb, { selection = selection }) end) == "%9")
+  assert(success(function(cb) tmux.spawn("/project", { "fake-agent" }, cb, { selection = selection }) end) == "%9")
   local info = success(function(cb) tmux.inspect("%9", cb) end)
   assert(vim.deep_equal(info.selection, selection))
+  local attached
+  package.loaded["ark.terminal"] = { open = function(pane, socket, session)
+    attached = { pane, socket, session }
+  end }
+  handler = function(args, opts)
+    if args[#args] == "#{session_id}\t#{socket_path}" then return { stdout = "$2\t/tmp/test.sock" } end
+    return default(args, opts)
+  end
   assert(success(function(cb) tmux.focus("%9", cb) end))
-  assert(has("select-window") and has("select-pane"))
+  assert(vim.deep_equal(attached, { "%9", "/tmp/test.sock", "$2" }))
+  assert(not has("select-window") and not has("select-pane"))
   metadata["%9"] = '{"harness":false}'
   failure(function(cb) tmux.inspect("%9", cb) end, "invalid @ark_selection")
   reset()
-  failure(function(cb) tmux.spawn("/project", {}, "40%", cb) end, "nonempty list")
-  assert(not has("split-window"))
+  failure(function(cb) tmux.spawn("/project", {}, cb) end, "nonempty list")
+  assert(not has("new-session"))
   failure(function(cb) tmux.kill("", cb) end, "invalid pane id")
   assert(not has("kill-pane"))
   reset()
